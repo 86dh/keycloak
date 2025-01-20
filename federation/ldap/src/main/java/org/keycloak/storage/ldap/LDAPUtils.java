@@ -32,11 +32,9 @@ import java.util.stream.Collectors;
 import javax.naming.directory.SearchControls;
 
 import org.jboss.logging.Logger;
-import org.keycloak.common.util.UriUtils;
+import org.keycloak.common.constants.KerberosConstants;
 import org.keycloak.component.ComponentModel;
 import org.keycloak.component.ComponentValidationException;
-import org.keycloak.models.Constants;
-import org.keycloak.models.KeycloakSession;
 import org.keycloak.models.LDAPConstants;
 import org.keycloak.models.ModelException;
 import org.keycloak.models.RealmModel;
@@ -64,7 +62,7 @@ public class LDAPUtils {
     private static final Logger log = Logger.getLogger(LDAPUtils.class);
 
     /**
-     * Method to crate a user in the LDAP. The user will be created when all
+     * Method to create a user in the LDAP. The user will be created when all
      * mandatory attributes specified by the mappers are set. The method
      * onRegisterUserToLDAP is first called in each mapper to set any default or
      * initial value.
@@ -139,6 +137,12 @@ public class LDAPUtils {
                 .getComponentsStream(ldapProvider.getModel().getId(), LDAPStorageMapper.class.getName())
                 .collect(Collectors.toList());
         ldapQuery.addMappers(mapperModels);
+
+        String kerberosPrincipalAttr = ldapProvider.getKerberosConfig().getKerberosPrincipalAttribute();
+        if (kerberosPrincipalAttr != null) {
+            ldapQuery.addReturningLdapAttribute(kerberosPrincipalAttr);
+            ldapQuery.addReturningReadOnlyLdapAttribute(kerberosPrincipalAttr);
+        }
 
         return ldapQuery;
     }
@@ -227,7 +231,7 @@ public class LDAPUtils {
      */
     public static void addMember(LDAPStorageProvider ldapProvider, MembershipType membershipType, String memberAttrName, String memberChildAttrName, LDAPObject ldapParent, LDAPObject ldapChild) {
         String membership = getMemberValueOfChildObject(ldapChild, membershipType, memberChildAttrName);
-        ldapProvider.getLdapIdentityStore().addMemberToGroup(ldapParent.getDn().toString(), memberAttrName, membership);
+        ldapProvider.getLdapIdentityStore().addMemberToGroup(ldapParent.getDn().getLdapName(), memberAttrName, membership);
     }
 
     /**
@@ -242,7 +246,7 @@ public class LDAPUtils {
      */
     public static void deleteMember(LDAPStorageProvider ldapProvider, MembershipType membershipType, String memberAttrName, String memberChildAttrName, LDAPObject ldapParent, LDAPObject ldapChild) {
         String userMembership = getMemberValueOfChildObject(ldapChild, membershipType, memberChildAttrName);
-        ldapProvider.getLdapIdentityStore().removeMemberFromGroup(ldapParent.getDn().toString(), memberAttrName, userMembership);
+        ldapProvider.getLdapIdentityStore().removeMemberFromGroup(ldapParent.getDn().getLdapName(), memberAttrName, userMembership);
     }
 
     /**
@@ -284,6 +288,18 @@ public class LDAPUtils {
      */
     public static List<LDAPObject> loadAllLDAPObjects(LDAPQuery ldapQuery, LDAPStorageProvider ldapProvider) {
         LDAPConfig ldapConfig = ldapProvider.getLdapIdentityStore().getConfig();
+        return loadAllLDAPObjects(ldapQuery, ldapConfig);
+    }
+
+    /**
+     * Load all LDAP objects corresponding to given query. We will load them paginated, so we allow to bypass the limitation of 1000
+     * maximum loaded objects in single query in MSAD
+     *
+     * @param ldapQuery LDAP query to be used. The caller should close it after calling this method
+     * @param ldapConfig
+     * @return
+     */
+    public static List<LDAPObject> loadAllLDAPObjects(LDAPQuery ldapQuery, LDAPConfig ldapConfig) {
         boolean pagination = ldapConfig.isPagination();
         if (pagination) {
             // For now reuse globally configured batch size in LDAP provider page
@@ -329,7 +345,7 @@ public class LDAPUtils {
 
     private static LDAPQuery createLdapQueryForRangeAttribute(LDAPStorageProvider ldapProvider, LDAPObject ldapObject, String name) {
         LDAPQuery q = new LDAPQuery(ldapProvider);
-        q.setSearchDn(ldapObject.getDn().toString());
+        q.setSearchDn(ldapObject.getDn().getLdapName());
         q.setSearchScope(SearchControls.OBJECT_SCOPE);
         q.addReturningLdapAttribute(name + ";range=" + (ldapObject.getCurrentRange(name) + 1) + "-*");
         return q;
@@ -356,7 +372,7 @@ public class LDAPUtils {
      * Map key are the attributes names in lower case
      */
     public static Map<String, Property<Object>> getUserModelProperties(){
-        
+
         Map<String, Property<Object>> userModelProps = PropertyQueries.createQuery(UserModel.class)
                 .addCriteria(new PropertyCriteria() {
 
@@ -381,9 +397,16 @@ public class LDAPUtils {
         return userModelProperties;
     }
 
-    public static void setLDAPHostnameToKeycloakSession(KeycloakSession session,LDAPConfig ldapConfig) {
-        String hostname = UriUtils.getHost(ldapConfig.getConnectionUrl());
-        session.setAttribute(Constants.SSL_SERVER_HOST_ATTR, hostname);
-        log.tracef("Setting LDAP server hostname '%s' as KeycloakSession attribute", hostname);
+    public static String getDefaultKerberosUserPrincipalAttribute(String vendor) {
+        if (vendor != null) {
+            switch (vendor) {
+                case LDAPConstants.VENDOR_RHDS:
+                    return KerberosConstants.KERBEROS_PRINCIPAL_LDAP_ATTRIBUTE_KRB_PRINCIPAL_NAME;
+                case LDAPConstants.VENDOR_ACTIVE_DIRECTORY:
+                    return KerberosConstants.KERBEROS_PRINCIPAL_LDAP_ATTRIBUTE_USER_PRINCIPAL_NAME;
+            }
+        }
+
+        return KerberosConstants.KERBEROS_PRINCIPAL_LDAP_ATTRIBUTE_KRB5_PRINCIPAL_NAME;
     }
 }

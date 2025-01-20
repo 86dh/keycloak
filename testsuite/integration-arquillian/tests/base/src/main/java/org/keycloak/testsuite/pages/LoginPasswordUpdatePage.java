@@ -19,14 +19,12 @@ package org.keycloak.testsuite.pages;
 import org.openqa.selenium.WebElement;
 import org.openqa.selenium.support.FindBy;
 
-import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertTrue;
 import static org.keycloak.testsuite.util.UIUtils.isElementVisible;
 
 /**
  * @author <a href="mailto:sthorger@redhat.com">Stian Thorgersen</a>
  */
-public class LoginPasswordUpdatePage extends LanguageComboboxAwarePage {
+public class LoginPasswordUpdatePage extends LogoutSessionsPage {
 
     @FindBy(id = "password-new")
     private WebElement newPasswordInput;
@@ -34,18 +32,15 @@ public class LoginPasswordUpdatePage extends LanguageComboboxAwarePage {
     @FindBy(id = "password-confirm")
     private WebElement passwordConfirmInput;
 
-    @FindBy(css = "input[type=\"submit\"]")
+    @FindBy(css = "[type=\"submit\"]")
     private WebElement submitButton;
 
-    @FindBy(className = "alert-error")
+    @FindBy(css = "div[class^='pf-v5-c-alert'], div[class^='alert-error']")
     private WebElement loginErrorMessage;
 
     @FindBy(className = "kc-feedback-text")
     private WebElement feedbackMessage;
 
-    @FindBy(id = "logout-sessions")
-    private WebElement logoutSessionsCheckbox;
-    
     @FindBy(name = "cancel-aia")
     private WebElement cancelAIAButton;
 
@@ -55,7 +50,7 @@ public class LoginPasswordUpdatePage extends LanguageComboboxAwarePage {
 
         submitButton.click();
     }
-    
+
     public void cancel() {
         cancelAIAButton.click();
     }
@@ -74,24 +69,6 @@ public class LoginPasswordUpdatePage extends LanguageComboboxAwarePage {
 
     public String getFeedbackMessage() {
         return feedbackMessage.getText();
-    }
-
-    public boolean isLogoutSessionDisplayed() {
-        return isElementVisible(logoutSessionsCheckbox);
-    }
-
-    public boolean isLogoutSessionsChecked() {
-        return logoutSessionsCheckbox.isSelected();
-    }
-
-    public void checkLogoutSessions() {
-        assertFalse("Logout sessions is checked", isLogoutSessionsChecked());
-        logoutSessionsCheckbox.click();
-    }
-
-    public void uncheckLogoutSessions() {
-        assertTrue("Logout sessions is not checked", isLogoutSessionsChecked());
-        logoutSessionsCheckbox.click();
     }
 
     public boolean isCancelDisplayed() {

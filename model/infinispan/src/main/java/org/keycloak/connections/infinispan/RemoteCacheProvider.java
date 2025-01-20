@@ -34,6 +34,7 @@ import org.infinispan.client.hotrod.RemoteCache;
 import org.infinispan.client.hotrod.RemoteCacheManager;
 import org.infinispan.client.hotrod.configuration.Configuration;
 import org.infinispan.client.hotrod.configuration.ConfigurationBuilder;
+import org.infinispan.commons.configuration.Combine;
 import org.infinispan.manager.EmbeddedCacheManager;
 import org.jboss.logging.Logger;
 import org.keycloak.Config;
@@ -95,9 +96,11 @@ public class RemoteCacheProvider {
     protected synchronized RemoteCache loadRemoteCache(String cacheName) {
         RemoteCache remoteCache = InfinispanUtil.getRemoteCache(cacheManager.getCache(cacheName));
 
-        if (remoteCache != null) {
-            logger.infof("Hotrod version for remoteCache %s: %s", remoteCache.getName(), remoteCache.getRemoteCacheManager().getConfiguration().version());
+        if (remoteCache == null) {
+            return null;
         }
+
+        logger.infof("Hotrod version for remoteCache %s: %s", remoteCache.getName(), remoteCache.getRemoteCacheManager().getConfiguration().version());
 
         Boolean remoteStoreSecurity = config.getBoolean("remoteStoreSecurityEnabled");
         if (remoteStoreSecurity == null) {
@@ -138,7 +141,7 @@ public class RemoteCacheProvider {
         Configuration origConfig = origManager.getConfiguration();
 
         ConfigurationBuilder cfgBuilder = new ConfigurationBuilder()
-                .read(origConfig);
+                .read(origConfig, Combine.DEFAULT);
 
         String securedHotRodEndpoint = origConfig.servers().stream()
               .map(serverConfiguration -> serverConfiguration.host() + ":" + serverConfiguration.port())

@@ -23,7 +23,7 @@ import org.keycloak.models.ModelIllegalStateException;
 import org.keycloak.models.ProtocolMapperModel;
 import org.keycloak.models.RealmModel;
 import org.keycloak.models.RoleModel;
-import java.util.List;
+
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicMarkableReference;
@@ -587,26 +587,6 @@ public class ClientModelLazyDelegate implements ClientModel {
     @Override
     public Stream<RoleModel> searchForRolesStream(String search, Integer first, Integer max) {
         return getDelegate().searchForRolesStream(search, first, max);
-    }
-
-    @Override
-    public Stream<String> getDefaultRolesStream() {
-        return getDelegate().getDefaultRolesStream();
-    }
-
-    @Override
-    public void addDefaultRole(String name) {
-        getDelegate().addDefaultRole(name);
-    }
-
-    @Override
-    public void updateDefaultRoles(String... defaultRoles) {
-        getDelegate().updateDefaultRoles(defaultRoles);
-    }
-
-    @Override
-    public void removeDefaultRoles(String... defaultRoles) {
-        getDelegate().removeDefaultRoles(defaultRoles);
     }
 
     @Override

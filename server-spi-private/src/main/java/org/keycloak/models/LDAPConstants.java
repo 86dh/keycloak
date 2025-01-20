@@ -17,7 +17,9 @@
 
 package org.keycloak.models;
 
-import java.util.Map;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.List;
 
 /**
  * @author <a href="mailto:mposolda@redhat.com">Marek Posolda</a>
@@ -56,21 +58,23 @@ public class LDAPConstants {
     public static final String USE_TRUSTSTORE_SPI = "useTruststoreSpi";
     public static final String USE_TRUSTSTORE_ALWAYS = "always";
     public static final String USE_TRUSTSTORE_NEVER = "never";
+
+    public static final String CONNECTION_TRACE_BER = "com.sun.jndi.ldap.trace.ber";
+
+    /**
+     * @deprecated Use {@link #USE_TRUSTSTORE_ALWAYS} instead.
+     */
+    @Deprecated
     public static final String USE_TRUSTSTORE_LDAPS_ONLY = "ldapsOnly";
 
     public static final String SEARCH_SCOPE = "searchScope";
     public static final String CONNECTION_POOLING = "connectionPooling";
-    public static final String CONNECTION_POOLING_AUTHENTICATION = "connectionPoolingAuthentication";
-    public static final String CONNECTION_POOLING_DEBUG = "connectionPoolingDebug";
-    public static final String CONNECTION_POOLING_INITSIZE = "connectionPoolingInitSize";
-    public static final String CONNECTION_POOLING_MAXSIZE = "connectionPoolingMaxSize";
-    public static final String CONNECTION_POOLING_PREFSIZE = "connectionPoolingPrefSize";
-    public static final String CONNECTION_POOLING_PROTOCOL = "connectionPoolingProtocol";
-    public static final String CONNECTION_POOLING_TIMEOUT = "connectionPoolingTimeout";
     public static final String CONNECTION_TIMEOUT = "connectionTimeout";
     public static final String READ_TIMEOUT = "readTimeout";
     // Could be discovered by rootDse supportedControl: 1.2.840.113556.1.4.319
     public static final String PAGINATION = "pagination";
+    public static final String MAX_CONDITIONS = "maxConditions";
+    public static final int DEFAULT_MAX_CONDITIONS = 64;
 
     public static final String EDIT_MODE = "editMode";
 
@@ -137,6 +141,10 @@ public class LDAPConstants {
 
     public static final String LDAP_MATCHING_RULE_IN_CHAIN = ":1.2.840.113556.1.4.1941:";
 
+    public static final String REFERRAL = "referral";
+
+    public static final String CONNECTION_TRACE = "connectionTrace";
+
     public static String getUuidAttributeName(String vendor) {
         if (vendor != null) {
             switch (vendor) {
@@ -154,20 +162,14 @@ public class LDAPConstants {
         return ENTRY_UUID;
     }
 
-
-
-    public static void setTruststoreSpiIfNeeded(String useTruststoreSpi, String url, Map<String, Object> env) {
-        boolean shouldSetTruststore;
-        if (useTruststoreSpi != null && useTruststoreSpi.equals(LDAPConstants.USE_TRUSTSTORE_ALWAYS)) {
-            shouldSetTruststore = true;
-        } else if (useTruststoreSpi != null && useTruststoreSpi.equals(LDAPConstants.USE_TRUSTSTORE_NEVER)) {
-            shouldSetTruststore = false;
-        } else {
-            shouldSetTruststore = (url != null && url.toLowerCase().startsWith("ldaps"));
-        }
-
-        if (shouldSetTruststore) {
-            env.put("java.naming.ldap.factory.socket", "org.keycloak.truststore.SSLSocketFactory");
-        }
+    /**
+     * @see com.sun.jndi.ldap.LdapURL#fromList(String) (Not using it directly to avoid usage of internal Java classes)
+     *
+     * @param ldapUrlList LDAP URL, which can possibly consists from multiple URLs like "ldaps://host1:636 ldaps://host2:636"
+     * @return List of all URLs
+     */
+    public static List<String> toLdapUrls(String ldapUrlList) {
+        if (ldapUrlList == null) return Collections.emptyList();
+        return  Arrays.asList(ldapUrlList.split(" "));
     }
 }

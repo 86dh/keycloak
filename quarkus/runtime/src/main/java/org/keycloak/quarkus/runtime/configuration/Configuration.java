@@ -17,21 +17,22 @@
 
 package org.keycloak.quarkus.runtime.configuration;
 
-import static io.smallrye.config.common.utils.StringUtil.replaceNonAlphanumericByUnderscores;
-import static org.keycloak.quarkus.runtime.Environment.getProfileOrDefault;
 import static org.keycloak.quarkus.runtime.cli.Picocli.ARG_PREFIX;
 
+import java.util.Map;
 import java.util.Optional;
-import java.util.function.Function;
+import java.util.Properties;
 
 import io.smallrye.config.ConfigValue;
 import io.smallrye.config.SmallRyeConfig;
 
 import org.eclipse.microprofile.config.spi.ConfigProviderResolver;
-import org.eclipse.microprofile.config.spi.ConfigSource;
-import org.keycloak.quarkus.runtime.Environment;
+import org.keycloak.config.Option;
 import org.keycloak.quarkus.runtime.configuration.mappers.PropertyMapper;
 import org.keycloak.quarkus.runtime.configuration.mappers.PropertyMappers;
+import org.keycloak.utils.StringUtil;
+
+import static org.keycloak.quarkus.runtime.configuration.MicroProfileConfigProvider.NS_KEYCLOAK_PREFIX;
 
 /**
  * The entry point for accessing the server configuration
@@ -40,37 +41,51 @@ public final class Configuration {
 
     public static final char OPTION_PART_SEPARATOR_CHAR = '-';
     public static final String OPTION_PART_SEPARATOR = String.valueOf(OPTION_PART_SEPARATOR_CHAR);
+    public static final String KC_OPTIMIZED = NS_KEYCLOAK_PREFIX + "optimized";
 
     private Configuration() {
 
+    }
+
+    public static boolean isTrue(Option<Boolean> option) {
+        return getOptionalBooleanValue(NS_KEYCLOAK_PREFIX + option.getKey()).orElse(false);
+    }
+
+    public static boolean isTrue(String propertyName) {
+        return getOptionalBooleanValue(propertyName).orElse(false);
+    }
+
+    public static boolean isBlank(Option<?> option) {
+        return getOptionalKcValue(option.getKey())
+                .map(StringUtil::isBlank)
+                .orElse(true);
+    }
+
+    public static boolean contains(Option<?> option, String value) {
+        return getOptionalValue(NS_KEYCLOAK_PREFIX + option.getKey())
+                .filter(f -> f.contains(value))
+                .isPresent();
+    }
+
+    public static boolean equals(Option<?> option, String value) {
+        return getOptionalValue(NS_KEYCLOAK_PREFIX + option.getKey())
+                .filter(f -> f.equals(value))
+                .isPresent();
     }
 
     public static synchronized SmallRyeConfig getConfig() {
         return (SmallRyeConfig) ConfigProviderResolver.instance().getConfig();
     }
 
-    public static Optional<String> getBuildTimeProperty(String name) {
-        Optional<String> value = getRawPersistedProperty(name);
-
-        if (value.isEmpty()) {
-            value = getRawPersistedProperty(getMappedPropertyName(name));
-        }
-
-        if (value.isEmpty()) {
-            String profile = Environment.getProfile();
-
-            if (profile == null) {
-                profile = getConfig().getRawValue(Environment.PROFILE);
-            }
-
-            value = getRawPersistedProperty("%" + profile + "." + name);
-        }
-
-        return value;
-    }
-
+    /**
+     * Raw persisted keycloak properties will match the resolved value of what was originally specified by the user
+     */
     public static Optional<String> getRawPersistedProperty(String name) {
         return Optional.ofNullable(PersistedConfigSource.getInstance().getValue(name));
+    }
+
+    public static Map<String, String> getRawPersistedProperties() {
+        return PersistedConfigSource.getInstance().getProperties();
     }
 
     public static String getRawValue(String propertyName) {
@@ -78,28 +93,51 @@ public final class Configuration {
     }
 
     public static Iterable<String> getPropertyNames() {
+        return getPropertyNames(false);
+    }
+
+    public static Iterable<String> getPropertyNames(boolean onlyPersisted) {
+        if (onlyPersisted) {
+            return PersistedConfigSource.getInstance().getPropertyNames();
+        }
+
         return getConfig().getPropertyNames();
+    }
+
+    public static ConfigValue getConfigValue(Option<?> option) {
+        return getKcConfigValue(option.getKey());
     }
 
     public static ConfigValue getConfigValue(String propertyName) {
         return getConfig().getConfigValue(propertyName);
     }
 
+    public static ConfigValue getKcConfigValue(String propertyName) {
+        return getConfigValue(NS_KEYCLOAK_PREFIX.concat(propertyName));
+    }
+
     public static Optional<String> getOptionalValue(String name) {
         return getConfig().getOptionalValue(name, String.class);
     }
 
+    public static Optional<String> getOptionalKcValue(String propertyName) {
+        return getOptionalValue(NS_KEYCLOAK_PREFIX.concat(propertyName));
+    }
+
+    public static Optional<String> getOptionalKcValue(Option<?> option) {
+        return getOptionalKcValue(option.getKey());
+    }
+
+    public static Optional<Boolean> getOptionalBooleanKcValue(String propertyName) {
+        return getOptionalValue(NS_KEYCLOAK_PREFIX.concat(propertyName)).map(Boolean::parseBoolean);
+    }
+
     public static Optional<Boolean> getOptionalBooleanValue(String name) {
-        return getConfig().getOptionalValue(name, String.class).map(new Function<String, Boolean>() {
-            @Override
-            public Boolean apply(String s) {
-                return Boolean.parseBoolean(s);
-            }
-        });
+        return getOptionalValue(name).map(Boolean::parseBoolean);
     }
 
     public static String getMappedPropertyName(String key) {
-        PropertyMapper mapper = PropertyMappers.getMapper(key);
+        PropertyMapper<?> mapper = PropertyMappers.getMapper(key);
 
         if (mapper == null) {
             return key;
@@ -107,26 +145,6 @@ public final class Configuration {
 
         // we also need to make sure the target property is available when defined such as when defining alias for provider config (no spi-prefix).
         return mapper.getTo() == null ? mapper.getFrom() : mapper.getTo();
-    }
-
-    public static Optional<String> getRuntimeProperty(String name) {
-        for (ConfigSource configSource : getConfig().getConfigSources()) {
-            if (PersistedConfigSource.NAME.equals(configSource.getName())) {
-                continue;
-            }
-
-            String value = getValue(configSource, name);
-
-            if (value == null) {
-                value = getValue(configSource, getMappedPropertyName(name));
-            }
-
-            if (value != null) {
-                return Optional.of(value);
-            }
-        }
-
-        return Optional.empty();
     }
 
     public static String toEnvVarFormat(String key) {
@@ -156,13 +174,31 @@ public final class Configuration {
         return sb.toString();
     }
 
-    private static String getValue(ConfigSource configSource, String name) {
-        String value = configSource.getValue("%".concat(getProfileOrDefault("prod").concat(".").concat(name)));
+    public static String replaceNonAlphanumericByUnderscores(String name) {
+        int length = name.length();
+        StringBuilder sb = new StringBuilder(length);
 
-        if (value == null) {
-            value = configSource.getValue(name);
+        for(int i = 0; i < length; ++i) {
+            char c = name.charAt(i);
+            if (('a' > c || c > 'z') && ('A' > c || c > 'Z') && ('0' > c || c > '9')) {
+                sb.append('_');
+            } else {
+                sb.append(c);
+            }
         }
 
-        return value;
+        return sb.toString();
+    }
+
+    public static boolean isOptimized() {
+        return Configuration.getRawPersistedProperty(KC_OPTIMIZED).isPresent();
+    }
+
+    public static void markAsOptimized(Properties properties) {
+        properties.put(Configuration.KC_OPTIMIZED, Boolean.TRUE.toString());
+    }
+
+    public static ConfigValue getNonPersistedConfigValue(String name) {
+        return PersistedConfigSource.getInstance().runWithDisabled(() -> getConfigValue(name));
     }
 }

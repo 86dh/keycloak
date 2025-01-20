@@ -9,8 +9,8 @@ import org.keycloak.OAuth2Constants;
 import org.keycloak.admin.client.resource.ClientResource;
 import org.keycloak.admin.client.resource.ClientsResource;
 import org.keycloak.admin.client.resource.RealmResource;
-import org.keycloak.client.registration.cli.config.ConfigData;
-import org.keycloak.client.registration.cli.config.FileConfigHandler;
+import org.keycloak.client.cli.config.ConfigData;
+import org.keycloak.client.cli.config.FileConfigHandler;
 import org.keycloak.common.Profile;
 import org.keycloak.common.constants.ServiceAccountConstants;
 import org.keycloak.common.crypto.FipsMode;
@@ -31,6 +31,7 @@ import java.io.IOException;
 import java.util.Arrays;
 import java.util.List;
 
+import static org.hamcrest.MatcherAssert.assertThat;
 import static org.keycloak.testsuite.util.ServerURLs.AUTH_SERVER_SSL_REQUIRED;
 import static org.keycloak.testsuite.cli.KcRegExec.execute;
 
@@ -213,7 +214,7 @@ public class KcRegCreateTest extends AbstractRegCliTest {
             }
 
             // TODO: SAML is not tested with FIPS enabled as it does not work. This needs to be revisited when SAML works with FIPS
-            if (AuthServerTestEnricher.AUTH_SERVER_FIPS_MODE == FipsMode.disabled) {
+            if (AuthServerTestEnricher.AUTH_SERVER_FIPS_MODE == FipsMode.DISABLED) {
 
                 // test create saml formated xml - format autodetection
                 File samlSpMetaFile = new File(System.getProperty("user.dir") + "/src/test/resources/cli/kcreg/saml-sp-metadata.xml");
@@ -297,7 +298,7 @@ public class KcRegCreateTest extends AbstractRegCliTest {
 
                 Assert.assertNotNull("clientId", oidcClient.getClientId());
                 Assert.assertEquals("redirect_uris", Arrays.asList("http://localhost:8980/myapp5/*"), oidcClient.getRedirectUris());
-                Assert.assertThat("grant_types", oidcClient.getGrantTypes(), Matchers.containsInAnyOrder("authorization_code", "client_credentials", "refresh_token", OAuth2Constants.UMA_GRANT_TYPE));
+                assertThat("grant_types", oidcClient.getGrantTypes(), Matchers.containsInAnyOrder("authorization_code", "client_credentials", "refresh_token", OAuth2Constants.UMA_GRANT_TYPE));
                 Assert.assertEquals("response_types", Arrays.asList("code", "none"), oidcClient.getResponseTypes());
                 Assert.assertEquals("client_name", "My Reg Authz", oidcClient.getClientName());
                 Assert.assertEquals("client_uri", "http://localhost:8980/myapp5", oidcClient.getClientUri());

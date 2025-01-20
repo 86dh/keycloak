@@ -23,6 +23,7 @@ import org.keycloak.models.RequiredActionProviderModel;
 import org.keycloak.models.UserModel;
 
 import java.util.Arrays;
+import java.util.HashSet;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.function.Consumer;
@@ -76,11 +77,13 @@ public class DefaultRequiredActions {
         UPDATE_PASSWORD(UserModel.RequiredAction.UPDATE_PASSWORD.name(), DefaultRequiredActions::addUpdatePasswordAction),
         TERMS_AND_CONDITIONS(UserModel.RequiredAction.TERMS_AND_CONDITIONS.name(), DefaultRequiredActions::addTermsAndConditionsAction),
         DELETE_ACCOUNT("delete_account", DefaultRequiredActions::addDeleteAccountAction),
+        DELETE_CREDENTIAL("delete_credential", DefaultRequiredActions::addDeleteCredentialAction),
         UPDATE_USER_LOCALE("update_user_locale", DefaultRequiredActions::addUpdateLocaleAction),
         UPDATE_EMAIL(UserModel.RequiredAction.UPDATE_EMAIL.name(), DefaultRequiredActions::addUpdateEmailAction, () -> isFeatureEnabled(Profile.Feature.UPDATE_EMAIL)),
         CONFIGURE_RECOVERY_AUTHN_CODES(UserModel.RequiredAction.CONFIGURE_RECOVERY_AUTHN_CODES.name(), DefaultRequiredActions::addRecoveryAuthnCodesAction, () -> isFeatureEnabled(Profile.Feature.RECOVERY_CODES)),
         WEBAUTHN_REGISTER("webauthn-register", DefaultRequiredActions::addWebAuthnRegisterAction, () -> isFeatureEnabled(Profile.Feature.WEB_AUTHN)),
-        WEBAUTHN_PASSWORDLESS_REGISTER("webauthn-register-passwordless", DefaultRequiredActions::addWebAuthnPasswordlessRegisterAction, () -> isFeatureEnabled(Profile.Feature.WEB_AUTHN));
+        WEBAUTHN_PASSWORDLESS_REGISTER("webauthn-register-passwordless", DefaultRequiredActions::addWebAuthnPasswordlessRegisterAction, () -> isFeatureEnabled(Profile.Feature.WEB_AUTHN)),
+        VERIFY_USER_PROFILE(UserModel.RequiredAction.VERIFY_PROFILE.name(), DefaultRequiredActions::addVerifyProfile);
 
         private final String alias;
         private final Consumer<RealmModel> addAction;
@@ -181,6 +184,19 @@ public class DefaultRequiredActions {
         }
     }
 
+    public static void addVerifyProfile(RealmModel realm) {
+        if (realm.getRequiredActionProviderByAlias(UserModel.RequiredAction.VERIFY_PROFILE.name()) == null) {
+            RequiredActionProviderModel termsAndConditions = new RequiredActionProviderModel();
+            termsAndConditions.setEnabled(true);
+            termsAndConditions.setAlias(UserModel.RequiredAction.VERIFY_PROFILE.name());
+            termsAndConditions.setName("Verify Profile");
+            termsAndConditions.setProviderId(UserModel.RequiredAction.VERIFY_PROFILE.name());
+            termsAndConditions.setDefaultAction(false);
+            termsAndConditions.setPriority(90);
+            realm.addRequiredActionProvider(termsAndConditions);
+        }
+    }
+
     public static void addDeleteAccountAction(RealmModel realm) {
         if (realm.getRequiredActionProviderByAlias("delete_account") == null) {
             RequiredActionProviderModel deleteAccount = new RequiredActionProviderModel();
@@ -191,6 +207,19 @@ public class DefaultRequiredActions {
             deleteAccount.setDefaultAction(false);
             deleteAccount.setPriority(60);
             realm.addRequiredActionProvider(deleteAccount);
+        }
+    }
+
+    public static void addDeleteCredentialAction(RealmModel realm) {
+        if (realm.getRequiredActionProviderByAlias("delete_credential") == null) {
+            RequiredActionProviderModel deleteCredential = new RequiredActionProviderModel();
+            deleteCredential.setEnabled(true);
+            deleteCredential.setAlias("delete_credential");
+            deleteCredential.setName("Delete Credential");
+            deleteCredential.setProviderId("delete_credential");
+            deleteCredential.setDefaultAction(false);
+            deleteCredential.setPriority(100);
+            realm.addRequiredActionProvider(deleteCredential);
         }
     }
 
@@ -291,6 +320,13 @@ public class DefaultRequiredActions {
         }
     }
 
+    private static final HashSet<String> REQUIRED_ACTIONS = new HashSet<>();
+    static {
+        for (UserModel.RequiredAction value : UserModel.RequiredAction.values()) {
+            REQUIRED_ACTIONS.add(value.name());
+        }
+    }
+
     /**
      * Checks whether given {@code providerId} case insensitively matches any of {@link UserModel.RequiredAction} enum
      * and if yes, it returns the value in correct form.
@@ -303,10 +339,13 @@ public class DefaultRequiredActions {
      *         of {@link UserModel.RequiredAction}
      */
     public static String getDefaultRequiredActionCaseInsensitively(String providerId) {
-        try {
-            return UserModel.RequiredAction.valueOf(providerId.toUpperCase()).name();
-        } catch (IllegalArgumentException iae) {
-            return providerId;
+        if (providerId == null) {
+            return null;
         }
+        String upperCase = providerId.toUpperCase();
+        if (REQUIRED_ACTIONS.contains(upperCase)) {
+            return upperCase;
+        }
+        return providerId;
     }
 }

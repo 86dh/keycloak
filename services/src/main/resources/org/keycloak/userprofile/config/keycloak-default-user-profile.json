@@ -9,7 +9,8 @@
 			},
 			"validations": {
 				"length": { "min": 3, "max": 255 },
-				"username-prohibited-characters": {}
+				"username-prohibited-characters": {},
+				"up-username-not-idn-homograph": {}
 			}
 		},
 		{
@@ -50,6 +51,13 @@
 				"length": { "max": 255 },
 				"person-name-prohibited-characters": {}
 			}
+		}
+	],
+	"groups": [
+		{
+			"name": "user-metadata",
+			"displayHeader": "User metadata",
+			"displayDescription": "Attributes, which refer to user metadata"
 		}
 	]
 }

@@ -17,30 +17,35 @@
 
 package org.keycloak.email;
 
-import com.sun.mail.smtp.SMTPMessage;
+import jakarta.mail.internet.MimeUtility;
 import org.jboss.logging.Logger;
+import org.keycloak.common.enums.HostnameVerificationPolicy;
 import org.keycloak.models.KeycloakSession;
 import org.keycloak.models.UserModel;
 import org.keycloak.services.ServicesLogger;
-import org.keycloak.truststore.HostnameVerificationPolicy;
 import org.keycloak.truststore.JSSETruststoreConfigurator;
 import org.keycloak.vault.VaultStringSecret;
 
-import javax.mail.Address;
-import javax.mail.MessagingException;
-import javax.mail.Multipart;
-import javax.mail.Session;
-import javax.mail.Transport;
-import javax.mail.internet.AddressException;
-import javax.mail.internet.InternetAddress;
-import javax.mail.internet.MimeBodyPart;
-import javax.mail.internet.MimeMultipart;
+import jakarta.mail.Address;
+import jakarta.mail.MessagingException;
+import jakarta.mail.Multipart;
+import jakarta.mail.Session;
+import jakarta.mail.Message;
+import jakarta.mail.Transport;
+import jakarta.mail.internet.AddressException;
+import jakarta.mail.internet.InternetAddress;
+import jakarta.mail.internet.MimeBodyPart;
+import jakarta.mail.internet.MimeMultipart;
+import jakarta.mail.internet.MimeMessage;
 import javax.net.ssl.SSLContext;
 import javax.net.ssl.SSLSocketFactory;
 import java.io.UnsupportedEncodingException;
+import java.nio.charset.StandardCharsets;
 import java.util.Date;
 import java.util.Map;
 import java.util.Properties;
+
+import static org.keycloak.utils.StringUtil.isNotBlank;
 
 /**
  * @author <a href="mailto:sthorger@redhat.com">Stian Thorgersen</a>
@@ -58,7 +63,11 @@ public class DefaultEmailSenderProvider implements EmailSenderProvider {
 
     @Override
     public void send(Map<String, String> config, UserModel user, String subject, String textBody, String htmlBody) throws EmailException {
-        send(config, retrieveEmailAddress(user), subject, textBody, htmlBody);
+        String address = retrieveEmailAddress(user);
+        if (address == null) {
+            throw new EmailException("No email address configured for the user");
+        }
+        send(config, address, subject, textBody, htmlBody);
     }
 
     @Override
@@ -92,7 +101,7 @@ public class DefaultEmailSenderProvider implements EmailSenderProvider {
                 props.setProperty("mail.smtp.starttls.enable", "true");
             }
 
-            if (ssl || starttls) {
+            if (ssl || starttls || auth){
                 props.put("mail.smtp.ssl.protocols", SUPPORTED_SSL_PROTOCOLS);
 
                 setupTruststore(props);
@@ -102,6 +111,10 @@ public class DefaultEmailSenderProvider implements EmailSenderProvider {
             props.setProperty("mail.smtp.connectiontimeout", "10000");
 
             String from = config.get("from");
+            if (from == null) {
+                throw new EmailException("No sender address configured in the realm settings for emails");
+            }
+
             String fromDisplayName = config.get("fromDisplayName");
             String replyTo = config.get("replyTo");
             String replyToDisplayName = config.get("replyToDisplayName");
@@ -123,19 +136,21 @@ public class DefaultEmailSenderProvider implements EmailSenderProvider {
                 multipart.addBodyPart(htmlPart);
             }
 
-            SMTPMessage msg = new SMTPMessage(session);
+            Message msg = new MimeMessage(session);
             msg.setFrom(toInternetAddress(from, fromDisplayName));
 
             msg.setReplyTo(new Address[]{toInternetAddress(from, fromDisplayName)});
-            if (replyTo != null && !replyTo.isEmpty()) {
+
+            if (isNotBlank(replyTo)) {
                 msg.setReplyTo(new Address[]{toInternetAddress(replyTo, replyToDisplayName)});
             }
-            if (envelopeFrom != null && !envelopeFrom.isEmpty()) {
-                msg.setEnvelopeFrom(envelopeFrom);
+
+            if (isNotBlank(envelopeFrom)) {
+                props.setProperty("mail.smtp.from", envelopeFrom);
             }
 
             msg.setHeader("To", address);
-            msg.setSubject(subject, "utf-8");
+            msg.setSubject(MimeUtility.encodeText(subject, StandardCharsets.UTF_8.name(), null));
             msg.setContent(multipart);
             msg.saveChanges();
             msg.setSentDate(new Date());
@@ -149,9 +164,11 @@ public class DefaultEmailSenderProvider implements EmailSenderProvider {
                 transport.connect();
             }
             transport.sendMessage(msg, new InternetAddress[]{new InternetAddress(address)});
+        } catch (EmailException e) {
+            throw e;
         } catch (Exception e) {
             ServicesLogger.LOGGER.failedToSendEmail(e);
-            throw new EmailException(e);
+            throw new EmailException("Error when attempting to send the email to the server. More information is available in the server log.", e);
         } finally {
             if (transport != null) {
                 try {
@@ -178,8 +195,6 @@ public class DefaultEmailSenderProvider implements EmailSenderProvider {
     }
 
     private void setupTruststore(Properties props) {
-        boolean checkServerIdentity = true;
-
         JSSETruststoreConfigurator configurator = new JSSETruststoreConfigurator(session);
 
         SSLSocketFactory factory = configurator.getSSLSocketFactory();
@@ -187,12 +202,11 @@ public class DefaultEmailSenderProvider implements EmailSenderProvider {
             props.put("mail.smtp.ssl.socketFactory", factory);
             if (configurator.getProvider().getPolicy() == HostnameVerificationPolicy.ANY) {
                 props.setProperty("mail.smtp.ssl.trust", "*");
-                checkServerIdentity = false;
+                props.put("mail.smtp.ssl.checkserveridentity", Boolean.FALSE.toString()); // this should be the default but seems to be impl specific, so set it explicitly just to be sure
             }
-        }
-
-        if (checkServerIdentity) {
-            props.put("mail.smtp.ssl.checkserveridentity", "true");
+            else {
+                props.put("mail.smtp.ssl.checkserveridentity", Boolean.TRUE.toString());
+            }
         }
     }
 

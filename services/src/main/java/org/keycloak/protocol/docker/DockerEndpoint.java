@@ -19,9 +19,9 @@ import org.keycloak.sessions.AuthenticationSessionModel;
 import org.keycloak.sessions.CommonClientSessionModel;
 import org.keycloak.utils.ProfileHelper;
 
-import javax.ws.rs.GET;
-import javax.ws.rs.core.MultivaluedMap;
-import javax.ws.rs.core.Response;
+import jakarta.ws.rs.GET;
+import jakarta.ws.rs.core.MultivaluedMap;
+import jakarta.ws.rs.core.Response;
 
 /**
  * Implements a docker-client understandable format.
@@ -61,6 +61,7 @@ public class DockerEndpoint extends AuthorizationEndpointBase {
             logger.errorv("Failed to lookup client given by service={0} parameter for realm: {1}.", service, realm.getName());
             throw new ErrorResponseException("invalid_client", "Client specified by 'service' parameter does not exist", Response.Status.BAD_REQUEST);
         }
+        session.getContext().setClient(client);
         scope = params.getFirst(DockerAuthV2Protocol.SCOPE_PARAM);
 
         checkSsl();

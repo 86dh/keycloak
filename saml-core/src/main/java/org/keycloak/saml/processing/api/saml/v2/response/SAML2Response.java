@@ -34,6 +34,7 @@ import org.keycloak.dom.saml.v2.assertion.StatementAbstractType;
 import org.keycloak.dom.saml.v2.assertion.SubjectConfirmationDataType;
 import org.keycloak.dom.saml.v2.assertion.SubjectConfirmationType;
 import org.keycloak.dom.saml.v2.assertion.SubjectType;
+import org.keycloak.dom.saml.v2.protocol.ArtifactResponseType;
 import org.keycloak.dom.saml.v2.protocol.ResponseType;
 import org.keycloak.dom.saml.v2.protocol.StatusResponseType;
 import org.keycloak.saml.common.PicketLinkLogger;
@@ -66,6 +67,7 @@ import javax.xml.datatype.XMLGregorianCalendar;
 import javax.xml.namespace.QName;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
+import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.io.Writer;
@@ -394,6 +396,21 @@ public class SAML2Response {
     }
 
     /**
+     * Get the Underlying SAML2Object from a document
+     * @param samlDocument a Document containing a SAML2Object
+     * @return a SAMLDocumentHolder
+     * @throws ProcessingException
+     * @throws ParsingException
+     */
+    public static SAMLDocumentHolder getSAML2ObjectFromDocument(Document samlDocument) throws ProcessingException, ParsingException {
+        SAMLParser samlParser = SAMLParser.getInstance();
+        JAXPValidationUtil.checkSchemaValidation(samlDocument);
+        SAML2Object responseType = (SAML2Object) samlParser.parse(samlDocument);
+
+        return new SAMLDocumentHolder(responseType, samlDocument);
+    }
+
+    /**
      * Convert an EncryptedElement into a Document
      *
      * @param encryptedElementType
@@ -423,13 +440,16 @@ public class SAML2Response {
      * @throws ConfigurationException
      * @throws ProcessingException
      */
-    public Document convert(StatusResponseType responseType) throws ProcessingException, ConfigurationException,
+    public static Document convert(StatusResponseType responseType) throws ProcessingException, ConfigurationException,
             ParsingException {
         ByteArrayOutputStream bos = new ByteArrayOutputStream();
 
         SAMLResponseWriter writer = new SAMLResponseWriter(StaxUtil.getXMLStreamWriter(bos));
 
-        if (responseType instanceof ResponseType) {
+        if (responseType instanceof ArtifactResponseType) {
+            ArtifactResponseType response = (ArtifactResponseType) responseType;
+            writer.write(response);
+        } else if (responseType instanceof ResponseType) {
             ResponseType response = (ResponseType) responseType;
             writer.write(response);
         } else {

@@ -33,10 +33,13 @@ import org.junit.Rule;
 import org.junit.Test;
 import org.keycloak.OAuth2Constants;
 import org.keycloak.broker.provider.util.SimpleHttp;
+import org.keycloak.common.util.Encode;
+import org.keycloak.common.util.KeycloakUriBuilder;
 import org.keycloak.models.Constants;
 import org.keycloak.representations.idm.RealmRepresentation;
 import org.keycloak.testsuite.AbstractKeycloakTest;
 import org.keycloak.testsuite.AssertEvents;
+import org.keycloak.testsuite.broker.util.SimpleHttpDefault;
 import org.keycloak.testsuite.pages.ErrorPage;
 import org.keycloak.testsuite.pages.LoginPage;
 import org.keycloak.testsuite.util.ClientBuilder;
@@ -51,7 +54,7 @@ import java.net.URL;
 import java.util.List;
 
 import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertThat;
+import static org.hamcrest.MatcherAssert.assertThat;
 import static org.keycloak.testsuite.admin.AbstractAdminTest.loadJson;
 import static org.keycloak.testsuite.util.OAuthClient.APP_ROOT;
 
@@ -103,17 +106,17 @@ public class OAuthRedirectUriTest extends AbstractKeycloakTest {
         RealmBuilder realm = RealmBuilder.edit(realmRepresentation).testEventListener();
 
         ClientBuilder installedApp = ClientBuilder.create().clientId("test-installed").name("test-installed")
-                .redirectUris(Constants.INSTALLED_APP_URN, Constants.INSTALLED_APP_URL)
+                .redirectUris(Constants.INSTALLED_APP_URN, "http://localhost")
                 .secret("password");
         realm.client(installedApp);
 
         ClientBuilder installedApp2 = ClientBuilder.create().clientId("test-installed2").name("test-installed2")
-                .redirectUris(Constants.INSTALLED_APP_URL + "/myapp")
+                .redirectUris("http://localhost/myapp")
                 .secret("password");
         realm.client(installedApp2);
 
         ClientBuilder installedApp3 = ClientBuilder.create().clientId("test-wildcard").name("test-wildcard")
-                .redirectUris("http://example.com/foo/*", "http://with-dash.example.local/foo/*", "http://localhost:8280/foo/*")
+                .redirectUris("http://example.com/foo/*", "http://with-dash.example.local/foo/*", "http://localhost:8280/foo/*", "http://something.com:80/*")
                 .secret("password");
         realm.client(installedApp3);
 
@@ -144,18 +147,23 @@ public class OAuthRedirectUriTest extends AbstractKeycloakTest {
                 .secret("password");
         realm.client(installedApp8);
 
+        ClientBuilder installedApp9 = ClientBuilder.create().clientId("test-encoded-path").name("test-encoded-path")
+                .redirectUris("http://localhost:8280/foo/bar%20bar%2092%2F72/3", "http://localhost:8280/foo/bar%20bar%2092%2F72/44")
+                .secret("password");
+        realm.client(installedApp9);
+
         ClientBuilder installedAppCustomScheme = ClientBuilder.create().clientId("custom-scheme").name("custom-scheme")
                 .redirectUris("android-app://org.keycloak.examples.cordova/https/keycloak-cordova-example.github.io/login")
                 .secret("password");
         realm.client(installedAppCustomScheme);
 
         ClientBuilder installedAppLoopback = ClientBuilder.create().clientId("test-installed-loopback").name("test-installed-loopback")
-                .redirectUris(Constants.INSTALLED_APP_LOOPBACK)
+                .redirectUris("http://127.0.0.1")
                 .secret("password");
         realm.client(installedAppLoopback);
 
         ClientBuilder installedAppLoopback2 = ClientBuilder.create().clientId("test-installed-loopback2").name("test-installed-loopback2")
-                .redirectUris(Constants.INSTALLED_APP_LOOPBACK + "/myapp")
+                .redirectUris("http://127.0.0.1/myapp")
                 .secret("password");
         realm.client(installedAppLoopback2);
 
@@ -294,10 +302,10 @@ public class OAuthRedirectUriTest extends AbstractKeycloakTest {
         CloseableHttpClient client = HttpClients.custom().setDefaultRequestConfig(globalConfig).setDefaultCookieStore(cookieStore).build();
 
         try {
-            String loginPage = SimpleHttp.doGet(loginUrl, client).asString();
+            String loginPage = SimpleHttpDefault.doGet(loginUrl, client).asString();
 
             String formAction = loginPage.split("action=\"")[1].split("\"")[0].replaceAll("&amp;", "&");
-            SimpleHttp.Response response = SimpleHttp.doPost(formAction, client).param("username", "test-user@localhost").param("password", "password").asResponse();
+            SimpleHttp.Response response = SimpleHttpDefault.doPost(formAction, client).param("username", "test-user@localhost").param("password", "password").asResponse();
 
             response.getStatus();
             assertThat(response.getFirstHeader("Location"), Matchers.startsWith("android-app://org.keycloak.examples.cordova/https/keycloak-cordova-example.github.io/login"));
@@ -338,19 +346,29 @@ public class OAuthRedirectUriTest extends AbstractKeycloakTest {
         checkRedirectUri("http://example.com/foobar", false);
         checkRedirectUri("http://localhost:8280/foobar", false, true);
 
+        checkRedirectUri("http://something.com:80/some", true);
+        checkRedirectUri("http://localhost:8280/foo/bar%20bar%2092%2F72/3", true, true);
+
         checkRedirectUri("http://example.com/foo/../", false);
         checkRedirectUri("http://example.com/foo/%2E%2E/", false); // url-encoded "http://example.com/foobar/../"
         checkRedirectUri("http://example.com/foo%2F%2E%2E%2F", false); // url-encoded "http://example.com/foobar/../"
-        checkRedirectUri("http://example.com/foo/%252E%252E/", false); // double-encoded "http://example.com/foobar/../"
-        checkRedirectUri("http://example.com/foo/%252E%252E/?some_query_param=some_value", false); // double-encoded "http://example.com/foobar/../?some_query_param=some_value"
-        checkRedirectUri("http://example.com/foo/%252E%252E/?encodeTest=a%3Cb", false); // double-encoded "http://example.com/foobar/../?encodeTest=a<b"
-        checkRedirectUri("http://example.com/foo/%252E%252E/#encodeTest=a%3Cb", false); // double-encoded "http://example.com/foobar/../?encodeTest=a<b"
-        checkRedirectUri("http://example.com/foo/%25252E%25252E/", false); // triple-encoded "http://example.com/foobar/../"
-        checkRedirectUri("http://example.com/foo/%2525252525252E%2525252525252E/", false); // seventh-encoded "http://example.com/foobar/../"
+        checkRedirectUri("http://example.com/foo/%252E%252E/", true); // double-encoded "http://example.com/foobar/../"
+        checkRedirectUri("http://example.com/foo/%252E%252E/?some_query_param=some_value", true); // double-encoded "http://example.com/foobar/../?some_query_param=some_value"
+        checkRedirectUri("http://example.com/foo/%252E%252E/?encodeTest=a%3Cb", true); // double-encoded "http://example.com/foobar/../?encodeTest=a<b"
+        checkRedirectUri("http://example.com/foo/%252E%252E/#encodeTest=a%3Cb", true); // double-encoded "http://example.com/foobar/../?encodeTest=a<b"
+        checkRedirectUri("http://example.com/foo/%25252E%25252E/", true); // triple-encoded "http://example.com/foobar/../"
+        checkRedirectUri("http://example.com/foo/%2525252525252E%2525252525252E/", true); // seventh-encoded "http://example.com/foobar/../"
 
         checkRedirectUri("http://example.com/foo?encodeTest=a%3Cb", true);
         checkRedirectUri("http://example.com/foo?encodeTest=a%3Cb#encode2=a%3Cb", true);
         checkRedirectUri("http://example.com/foo/#encode2=a%3Cb", true);
+    }
+
+    // Client "Valid Redirect URL" is configured for exact match with supplied redirect-url
+    @Test
+    public void testRedirectUriWithEncodedPath() throws IOException {
+        oauth.clientId("test-encoded-path");
+        checkRedirectUri("http://localhost:8280/foo/bar%20bar%2092%2F72/3", true, true);
     }
 
     @Test
@@ -365,11 +383,11 @@ public class OAuthRedirectUriTest extends AbstractKeycloakTest {
         oauth.clientId("test-dash");
 
         checkRedirectUri("http://with-dash.example.local", true);
-        checkRedirectUri("http://wiTh-dAsh.example.local", true);
+        checkRedirectUri("http://wiTh-dAsh.example.local", false);
         checkRedirectUri("http://with-dash.example.local/foo", true);
-        checkRedirectUri("http://wiTh-dAsh.example.local/foo", true);
+        checkRedirectUri("http://wiTh-dAsh.example.local/foo", false);
         checkRedirectUri("http://with-dash.example.local/foo", true);
-        checkRedirectUri("http://wiTh-dAsh.example.local/foo", true);
+        checkRedirectUri("http://wiTh-dAsh.example.local/foo", false);
         checkRedirectUri("http://wiTh-dAsh.example.local/Foo", false);
         checkRedirectUri("http://wiTh-dAsh.example.local/foO", false);
     }
@@ -378,8 +396,9 @@ public class OAuthRedirectUriTest extends AbstractKeycloakTest {
     public void testDifferentCaseInScheme() throws IOException {
         oauth.clientId("test-dash");
 
-        checkRedirectUri("HTTP://with-dash.example.local", true);
-        checkRedirectUri("Http://wiTh-dAsh.example.local", true);
+        checkRedirectUri("http://with-dash.example.local", true);
+        checkRedirectUri("HTTP://with-dash.example.local", false);
+        checkRedirectUri("Http://wiTh-dAsh.example.local", false);
     }
 
     @Test
@@ -459,7 +478,10 @@ public class OAuthRedirectUriTest extends AbstractKeycloakTest {
     }
 
     private void checkRedirectUri(String redirectUri, boolean expectValid, boolean checkCodeToToken) throws IOException {
-        oauth.redirectUri(redirectUri);
+        // Encoding parameter to make sure same String, which we're using would be used on server by RedirectUtils
+        // (as parameter is URL-decoded for one time on the server side by underlying server/resteasy)
+        String encodedRedirectUri = Encode.urlEncode(redirectUri);
+        oauth.redirectUri(encodedRedirectUri);
 
         if (!expectValid) {
             oauth.openLoginForm();
@@ -476,6 +498,21 @@ public class OAuthRedirectUriTest extends AbstractKeycloakTest {
                 String code = oauth.getCurrentQuery().get(OAuth2Constants.CODE);
                 Assert.assertNotNull(code);
 
+                // Test that browser URL where Keycloak redirected user matches with the used redirectUri
+                String browserUrlAfterRedirectFromKeycloak = KeycloakUriBuilder.fromUri(driver.getCurrentUrl())
+                        .replaceQueryParam(OAuth2Constants.CODE, null)
+                        .replaceQueryParam(OAuth2Constants.STATE, null)
+                        .replaceQueryParam(OAuth2Constants.SESSION_STATE, null)
+                        .replaceQueryParam(OAuth2Constants.ISSUER, null)
+                        .build().toString();
+                if (browserUrlAfterRedirectFromKeycloak.endsWith("/")) browserUrlAfterRedirectFromKeycloak = browserUrlAfterRedirectFromKeycloak.substring(0, browserUrlAfterRedirectFromKeycloak.length() - 1);
+                if (Constants.INSTALLED_APP_URN.equals(redirectUri)) {
+                    assertThat(browserUrlAfterRedirectFromKeycloak, Matchers.endsWith("oauth/oob"));
+                } else {
+                    Assert.assertEquals(redirectUri, browserUrlAfterRedirectFromKeycloak);
+                }
+
+                oauth.redirectUri(redirectUri);
                 OAuthClient.AccessTokenResponse tokenResponse = oauth.doAccessTokenRequest(code, "password");
 
                 Assert.assertEquals("Expected success, but got error: " + tokenResponse.getError(), 200, tokenResponse.getStatusCode());

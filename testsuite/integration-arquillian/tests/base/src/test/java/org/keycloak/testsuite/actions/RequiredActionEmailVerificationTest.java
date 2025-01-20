@@ -31,7 +31,9 @@ import org.keycloak.events.Errors;
 import org.keycloak.events.EventType;
 import org.keycloak.models.Constants;
 import org.keycloak.models.RealmModel;
+import org.keycloak.models.UserModel;
 import org.keycloak.models.UserModel.RequiredAction;
+import org.keycloak.models.utils.KeycloakModelUtils;
 import org.keycloak.representations.idm.EventRepresentation;
 import org.keycloak.representations.idm.RealmRepresentation;
 import org.keycloak.representations.idm.UserRepresentation;
@@ -40,8 +42,7 @@ import org.keycloak.testsuite.AssertEvents;
 import org.keycloak.testsuite.AbstractTestRealmKeycloakTest;
 import org.keycloak.testsuite.admin.ApiUtil;
 import org.keycloak.testsuite.arquillian.AuthServerTestEnricher;
-import org.keycloak.testsuite.arquillian.annotation.DisableFeature;
-import org.keycloak.testsuite.auth.page.AuthRealm;
+import org.keycloak.testsuite.arquillian.annotation.EnableFeature;
 import org.keycloak.testsuite.cluster.AuthenticationSessionFailoverClusterTest;
 import org.keycloak.testsuite.pages.AppPage;
 import org.keycloak.testsuite.pages.AppPage.RequestType;
@@ -51,37 +52,46 @@ import org.keycloak.testsuite.pages.InfoPage;
 import org.keycloak.testsuite.pages.LoginPage;
 import org.keycloak.testsuite.pages.RegisterPage;
 import org.keycloak.testsuite.pages.VerifyEmailPage;
+import org.keycloak.testsuite.pages.VerifyProfilePage;
 import org.keycloak.testsuite.updaters.UserAttributeUpdater;
 import org.keycloak.testsuite.util.GreenMailRule;
 import org.keycloak.testsuite.util.InfinispanTestTimeServiceRule;
-import org.keycloak.testsuite.util.MailUtils;
 import org.keycloak.testsuite.util.SecondBrowser;
-import org.keycloak.testsuite.util.UserActionTokenBuilder;
 import org.keycloak.testsuite.util.UserBuilder;
+import org.keycloak.testsuite.util.AccountHelper;
+import org.keycloak.testsuite.util.TestAppHelper;
+import org.keycloak.testsuite.util.UserActionTokenBuilder;
+import org.keycloak.testsuite.util.MailUtils;
 
 import java.io.Closeable;
-import javax.mail.MessagingException;
-import javax.mail.internet.MimeMessage;
+import jakarta.mail.MessagingException;
+import jakarta.mail.internet.MimeMessage;
 import java.io.IOException;
+import java.net.URISyntaxException;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 import org.hamcrest.Matchers;
 import org.junit.Assume;
+import org.keycloak.testsuite.util.WaitUtils;
 import org.openqa.selenium.By;
 import org.openqa.selenium.WebDriver;
 import org.openqa.selenium.WebElement;
 
+import static org.hamcrest.CoreMatchers.notNullValue;
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.core.Is.is;
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertTrue;
 
 /**
  * @author <a href="mailto:sthorger@redhat.com">Stian Thorgersen</a>
  */
-@DisableFeature(value = Profile.Feature.ACCOUNT2, skipRestart = true) // TODO remove this (KEYCLOAK-16228)
 public class RequiredActionEmailVerificationTest extends AbstractTestRealmKeycloakTest {
 
     @Rule
@@ -101,6 +111,9 @@ public class RequiredActionEmailVerificationTest extends AbstractTestRealmKeyclo
 
     @Page
     protected VerifyEmailPage verifyEmailPage;
+
+    @Page
+    protected VerifyProfilePage verifyProfilePage;
 
     @Page
     protected RegisterPage registerPage;
@@ -131,8 +144,16 @@ public class RequiredActionEmailVerificationTest extends AbstractTestRealmKeyclo
         ApiUtil.removeUserByUsername(testRealm(), "test-user@localhost");
         UserRepresentation user = UserBuilder.create().enabled(true)
                 .username("test-user@localhost")
+                .firstName("test-user")
+                .lastName("test-user")
+                .emailVerified(false)
                 .email("test-user@localhost").build();
         testUserId = ApiUtil.createUserAndResetPasswordWithAdminClient(testRealm(), user, "password");
+    }
+
+    protected boolean removeVerifyProfileAtImport() {
+        // in this test verify profile is enabled
+        return false;
     }
 
     /**
@@ -168,7 +189,7 @@ public class RequiredActionEmailVerificationTest extends AbstractTestRealmKeyclo
 
         MimeMessage message = greenMail.getReceivedMessages()[0];
 
-        String verificationUrl = getPasswordResetEmailLink(message);
+        String verificationUrl = getEmailLink(message);
 
         AssertEvents.ExpectedEvent emailEvent = events.expectRequiredAction(EventType.SEND_VERIFY_EMAIL).detail("email", "test-user@localhost");
         EventRepresentation sendEvent = emailEvent.assertEvent();
@@ -206,7 +227,7 @@ public class RequiredActionEmailVerificationTest extends AbstractTestRealmKeyclo
         EventRepresentation sendEvent = events.expectRequiredAction(EventType.SEND_VERIFY_EMAIL).user(userId).detail(Details.USERNAME, "verifyemail").detail("email", "email@mail.com").assertEvent();
         String mailCodeId = sendEvent.getDetails().get(Details.CODE_ID);
 
-        String verificationUrl = getPasswordResetEmailLink(message);
+        String verificationUrl = getEmailLink(message);
 
         driver.navigate().to(verificationUrl.trim());
 
@@ -220,6 +241,80 @@ public class RequiredActionEmailVerificationTest extends AbstractTestRealmKeyclo
           .assertEvent();
 
         events.expectLogin().user(userId).session(mailCodeId).detail(Details.USERNAME, "verifyemail").assertEvent();
+    }
+
+    @Test
+    public void verifyEmailRegisterSetLocale() throws IOException, MessagingException {
+        RealmRepresentation realm = testRealm().toRepresentation();
+        realm.setInternationalizationEnabled(true);
+        realm.setSupportedLocales(Set.of("en", "pt"));
+        testRealm().update(realm);
+        loginPage.open();
+        loginPage.clickRegister();
+        loginPage.openLanguage("Português");
+        registerPage.register("firstName", "lastName", "locale@mail.com", "locale", "password", "password");
+
+        Assert.assertEquals(1, greenMail.getReceivedMessages().length);
+        MimeMessage message = greenMail.getReceivedMessages()[0];
+        String verificationUrl = getEmailLink(message);
+
+        driver.manage().deleteAllCookies();
+        driver.navigate().to(verificationUrl.trim());
+        assertTrue(driver.getPageSource().contains("Confirme a validade do endereço"));
+    }
+
+    @Test
+    public void verifyEmailFromAnotherAccountWhenUserIsAuthenticated() throws Exception {
+        loginPage.open();
+        loginPage.clickRegister();
+        String username1 = KeycloakModelUtils.generateId();
+        registerPage.register("firstName", "lastName", username1 + "@mail.com", username1, "password", "password");
+        verifyEmailPage.assertCurrent();
+        Assert.assertEquals(1, greenMail.getReceivedMessages().length);
+        MimeMessage message = greenMail.getReceivedMessages()[0];
+        String verificationLink1 = getEmailLink(message);
+
+        loginPage.open();
+        loginPage.clickRegister();
+        String username2 = KeycloakModelUtils.generateId();
+        registerPage.register("firstName", "lastName", username2 + "@mail.com", username2, "password", "password");
+        verifyEmailPage.assertCurrent();
+        Assert.assertEquals(2, greenMail.getReceivedMessages().length);
+        message = greenMail.getReceivedMessages()[1];
+        String verificationLink2 = getEmailLink(message);
+        driver.navigate().to(verificationLink2.trim());
+        Assert.assertEquals(RequestType.AUTH_RESPONSE, appPage.getRequestType());
+        driver.navigate().to(verificationLink1.trim());
+        assertTrue(errorPage.getError().contains("You are already authenticated as different user"));
+        UserRepresentation user1 = testRealm().users().search(username1).get(0);
+        UserRepresentation user2 = testRealm().users().search(username2).get(0);
+        assertFalse(user1.isEmailVerified());
+        assertTrue(user2.isEmailVerified());
+    }
+
+    @Test
+    public void verifyEmailFromAnotherAccountAfterEmalIsVerified() throws Exception {
+        loginPage.open();
+        loginPage.clickRegister();
+        String username1 = KeycloakModelUtils.generateId();
+        registerPage.register("firstName", "lastName", username1 + "@mail.com", username1, "password", "password");
+        verifyEmailPage.assertCurrent();
+        Assert.assertEquals(1, greenMail.getReceivedMessages().length);
+        MimeMessage message = greenMail.getReceivedMessages()[0];
+        String verificationLink1 = getEmailLink(message);
+
+        loginPage.open();
+        loginPage.clickRegister();
+        String username2 = KeycloakModelUtils.generateId();
+        registerPage.register("firstName", "lastName", username2 + "@mail.com", username2, "password", "password");
+        verifyEmailPage.assertCurrent();
+        Assert.assertEquals(2, greenMail.getReceivedMessages().length);
+        message = greenMail.getReceivedMessages()[1];
+        String verificationLink2 = getEmailLink(message);
+
+        driver.navigate().to(verificationLink1.trim());
+        driver.navigate().to(verificationLink2.trim());
+        assertTrue(errorPage.getError().contains("You are already authenticated as different user"));
     }
 
     @Test
@@ -247,7 +342,7 @@ public class RequiredActionEmailVerificationTest extends AbstractTestRealmKeyclo
         Assert.assertEquals(2, greenMail.getReceivedMessages().length);
 
         MimeMessage message = greenMail.getLastReceivedMessage();
-        String verificationUrl = getPasswordResetEmailLink(message);
+        String verificationUrl = getEmailLink(message);
 
         driver.navigate().to(verificationUrl.trim());
 
@@ -291,7 +386,7 @@ public class RequiredActionEmailVerificationTest extends AbstractTestRealmKeyclo
         Assert.assertEquals(2, greenMail.getReceivedMessages().length);
 
         MimeMessage message = greenMail.getLastReceivedMessage();
-        String verificationUrl = getPasswordResetEmailLink(message);
+        String verificationUrl = getEmailLink(message);
 
         driver.navigate().to(verificationUrl.trim());
 
@@ -321,7 +416,7 @@ public class RequiredActionEmailVerificationTest extends AbstractTestRealmKeyclo
 
         MimeMessage message1 = greenMail.getReceivedMessages()[0];
 
-        String verificationUrl1 = getPasswordResetEmailLink(message1);
+        String verificationUrl1 = getEmailLink(message1);
 
         driver.navigate().to(verificationUrl1.trim());
 
@@ -330,12 +425,16 @@ public class RequiredActionEmailVerificationTest extends AbstractTestRealmKeyclo
 
         MimeMessage message2 = greenMail.getReceivedMessages()[1];
 
-        String verificationUrl2 = getPasswordResetEmailLink(message2);
+        String verificationUrl2 = getEmailLink(message2);
 
+        events.clear();
         driver.navigate().to(verificationUrl2.trim());
-
+        events.expectRequiredAction(EventType.VERIFY_EMAIL)
+                .error(Errors.EMAIL_ALREADY_VERIFIED)
+                .detail(Details.REDIRECT_URI, Matchers.any(String.class))
+                .assertEvent();
         infoPage.assertCurrent();
-        Assert.assertEquals("You are already logged in.", infoPage.getInfo());
+        Assert.assertEquals("Your email address has been verified already.", infoPage.getInfo());
     }
 
     @Test
@@ -351,25 +450,39 @@ public class RequiredActionEmailVerificationTest extends AbstractTestRealmKeyclo
 
         MimeMessage message1 = greenMail.getReceivedMessages()[0];
 
-        String verificationUrl1 = getPasswordResetEmailLink(message1);
+        String verificationUrl1 = getEmailLink(message1);
 
         driver.navigate().to(verificationUrl1.trim());
 
-        appPage.assertCurrent();
-        accountPage.setAuthRealm(AuthRealm.TEST);
-        accountPage.navigateTo();
-        accountPage.logOut();
+        AccountHelper.logout(testRealm(), "test-user@localhost");
 
         MimeMessage message2 = greenMail.getReceivedMessages()[1];
 
-        String verificationUrl2 = getPasswordResetEmailLink(message2);
+        String verificationUrl2 = getEmailLink(message2);
 
         driver.navigate().to(verificationUrl2.trim());
 
-        proceedPage.assertCurrent();
-        proceedPage.clickProceedLink();
-        infoPage.assertCurrent();
-        assertEquals("Your email address has been verified.", infoPage.getInfo());
+        assertEquals("Your email address has been verified already.", infoPage.getInfo());
+    }
+
+    @Test
+    public void verifyEmailResendAndVerifyWithLatestLink() throws IOException, MessagingException {
+        // Email verification can be performed any number of times
+        loginPage.open();
+        loginPage.login("test-user@localhost", "password");
+        verifyEmailPage.clickResendEmail();
+        verifyEmailPage.assertCurrent();
+        Assert.assertEquals(2, greenMail.getReceivedMessages().length);
+        MimeMessage message1 = greenMail.getReceivedMessages()[0];
+        String verificationUrl1 = getEmailLink(message1);
+
+        MimeMessage message2 = greenMail.getReceivedMessages()[1];
+        String verificationUrl2 = getEmailLink(message2);
+        driver.navigate().to(verificationUrl2.trim());
+        appPage.assertCurrent();
+
+        driver.navigate().to(verificationUrl1.trim());
+        assertEquals("Your email address has been verified already.", infoPage.getInfo());
     }
 
     @Test
@@ -383,7 +496,7 @@ public class RequiredActionEmailVerificationTest extends AbstractTestRealmKeyclo
 
         MimeMessage message = greenMail.getLastReceivedMessage();
 
-        String verificationUrl = getPasswordResetEmailLink(message);
+        String verificationUrl = getEmailLink(message);
 
         AssertEvents.ExpectedEvent emailEvent = events.expectRequiredAction(EventType.SEND_VERIFY_EMAIL).detail("email", "test-user@localhost");
         EventRepresentation sendEvent = emailEvent.assertEvent();
@@ -422,7 +535,7 @@ public class RequiredActionEmailVerificationTest extends AbstractTestRealmKeyclo
 
         MimeMessage message = greenMail.getLastReceivedMessage();
 
-        String verificationUrl = getPasswordResetEmailLink(message);
+        String verificationUrl = getEmailLink(message);
 
         verificationUrl = KeycloakUriBuilder.fromUri(verificationUrl).replaceQueryParam(Constants.KEY, "foo").build().toString();
 
@@ -453,7 +566,7 @@ public class RequiredActionEmailVerificationTest extends AbstractTestRealmKeyclo
 
         MimeMessage message = greenMail.getLastReceivedMessage();
 
-        String verificationUrl = getPasswordResetEmailLink(message);
+        String verificationUrl = getEmailLink(message);
 
         events.poll();
 
@@ -495,7 +608,7 @@ public class RequiredActionEmailVerificationTest extends AbstractTestRealmKeyclo
 
         MimeMessage message = greenMail.getLastReceivedMessage();
 
-        String verificationUrl = getPasswordResetEmailLink(message);
+        String verificationUrl = getEmailLink(message);
 
         events.poll();
 
@@ -540,7 +653,7 @@ public class RequiredActionEmailVerificationTest extends AbstractTestRealmKeyclo
 
         MimeMessage message = greenMail.getLastReceivedMessage();
 
-        String verificationUrl = getPasswordResetEmailLink(message);
+        String verificationUrl = getEmailLink(message);
 
         events.poll();
 
@@ -578,7 +691,7 @@ public class RequiredActionEmailVerificationTest extends AbstractTestRealmKeyclo
 
         MimeMessage message = greenMail.getLastReceivedMessage();
 
-        String verificationUrl = getPasswordResetEmailLink(message);
+        String verificationUrl = getEmailLink(message);
 
         events.poll();
 
@@ -606,13 +719,13 @@ public class RequiredActionEmailVerificationTest extends AbstractTestRealmKeyclo
     }
 
 
-    public static String getPasswordResetEmailLink(MimeMessage message) throws IOException, MessagingException {
+    public static String getEmailLink(MimeMessage message) throws IOException, MessagingException {
         return MailUtils.getPasswordResetEmailLink(message);
     }
 
     // https://issues.jboss.org/browse/KEYCLOAK-5861
     @Test
-    public void verifyEmailNewBrowserSessionWithClientRedirect() throws IOException, MessagingException {
+    public void verifyEmailNewBrowserSessionWithClientRedirect() throws URISyntaxException, IOException, MessagingException {
         try (Closeable u = new UserAttributeUpdater(testRealm().users().get(testUserId))
           .setEmailVerified(false)
           .update()) {
@@ -621,7 +734,7 @@ public class RequiredActionEmailVerificationTest extends AbstractTestRealmKeyclo
             Assert.assertEquals(1, greenMail.getReceivedMessages().length);
             MimeMessage message = greenMail.getLastReceivedMessage();
 
-            String verificationUrl = getPasswordResetEmailLink(message);
+            String verificationUrl = getEmailLink(message);
 
             driver.manage().deleteAllCookies();
 
@@ -632,14 +745,10 @@ public class RequiredActionEmailVerificationTest extends AbstractTestRealmKeyclo
             infoPage.assertCurrent();
             assertEquals("Your account has been updated.", infoPage.getInfo());
 
-            // Now log into account page
-            accountPage.setAuthRealm(testRealm().toRepresentation().getRealm());
-            accountPage.navigateTo();
-
-            loginPage.assertCurrent();
-            loginPage.login("test-user@localhost", "password");
-
-            accountPage.assertCurrent();
+            // Now login to app
+            TestAppHelper testAppHelper = new TestAppHelper(oauth, loginPage, appPage);
+            testAppHelper.login("test-user@localhost", "password");
+            appPage.assertCurrent();
         }
     }
 
@@ -654,7 +763,7 @@ public class RequiredActionEmailVerificationTest extends AbstractTestRealmKeyclo
 
         MimeMessage message = greenMail.getLastReceivedMessage();
 
-        String verificationUrl = getPasswordResetEmailLink(message);
+        String verificationUrl = getEmailLink(message);
 
         // open link in the second browser without the session
         driver2.navigate().to(verificationUrl.trim());
@@ -682,9 +791,8 @@ public class RequiredActionEmailVerificationTest extends AbstractTestRealmKeyclo
                 .setEmailVerified(false)
                 .setRequiredActions(RequiredAction.VERIFY_EMAIL)
                 .update()) {
-            accountPage.setAuthRealm(testRealm().toRepresentation().getRealm());
-            accountPage.navigateTo();
 
+            loginPage.open();
             loginPage.assertCurrent();
             loginPage.login("test-user@localhost", "password");
 
@@ -693,11 +801,11 @@ public class RequiredActionEmailVerificationTest extends AbstractTestRealmKeyclo
             Assert.assertEquals(1, greenMail.getReceivedMessages().length);
             MimeMessage message = greenMail.getLastReceivedMessage();
 
-            String verificationUrl = getPasswordResetEmailLink(message);
+            String verificationUrl = getEmailLink(message);
 
             driver.navigate().to(verificationUrl.trim());
 
-            accountPage.assertCurrent();
+            appPage.assertCurrent();
         }
     }
 
@@ -712,15 +820,13 @@ public class RequiredActionEmailVerificationTest extends AbstractTestRealmKeyclo
             Assert.assertEquals(1, greenMail.getReceivedMessages().length);
             MimeMessage message = greenMail.getLastReceivedMessage();
 
-            String verificationUrl = getPasswordResetEmailLink(message);
+            String verificationUrl = getEmailLink(message);
 
             driver.manage().deleteAllCookies();
 
             driver.navigate().to(verificationUrl);
 
-            accountPage.setAuthRealm(testRealm().toRepresentation().getRealm());
-            accountPage.navigateTo();
-
+            loginPage.open();
             loginPage.assertCurrent();
             loginPage.login("test-user@localhost", "password");
 
@@ -739,65 +845,58 @@ public class RequiredActionEmailVerificationTest extends AbstractTestRealmKeyclo
             Assert.assertEquals(1, greenMail.getReceivedMessages().length);
             MimeMessage message = greenMail.getLastReceivedMessage();
 
-            String verificationUrl = getPasswordResetEmailLink(message);
+            String verificationUrl = getEmailLink(message);
 
             driver.manage().deleteAllCookies();
 
             driver.navigate().to(verificationUrl);
 
-            accountPage.setAuthRealm(testRealm().toRepresentation().getRealm());
-            accountPage.navigateTo();
-
+            loginPage.open();
             loginPage.assertCurrent();
             loginPage.login("test-user@localhost", "password");
 
-            accountPage.assertCurrent();
+            appPage.assertCurrent();
         }
     }
 
     @Test
-    public void verifyEmailDuringAuthFlowAfterLogout() throws IOException, MessagingException {
+    public void verifyEmailDuringAuthFlowAfterLogout() throws URISyntaxException, IOException, MessagingException {
         try (Closeable u = new UserAttributeUpdater(testRealm().users().get(testUserId))
                 .setEmailVerified(true)
                 .update()) {
-            accountPage.setAuthRealm(testRealm().toRepresentation().getRealm());
-            accountPage.navigateTo();
 
-            loginPage.assertCurrent();
-            loginPage.login("test-user@localhost", "password");
+            TestAppHelper testAppHelper = new TestAppHelper(oauth, loginPage, appPage);
+            testAppHelper.login("test-user@localhost", "password");
+            appPage.assertCurrent();
 
-            accountPage.assertCurrent();
-
-            accountPage.logOut();
-            loginPage.assertCurrent();
+            testAppHelper.logout();
+            appPage.assertCurrent();
 
             verifyEmailDuringAuthFlow();
         }
     }
 
     @Test
-    public void verifyEmailDuringAuthFlowAfterRefresh() throws IOException, MessagingException {
+    public void verifyEmailDuringAuthFlowAfterRefresh() throws URISyntaxException, IOException, MessagingException {
         try (Closeable u = new UserAttributeUpdater(testRealm().users().get(testUserId))
                 .setEmailVerified(true)
                 .update()) {
             final String testRealmName = testRealm().toRepresentation().getRealm();
-            accountPage.setAuthRealm(testRealmName);
 
             // Browser 1: Log in
-            accountPage.navigateTo();
-            loginPage.assertCurrent();
-            loginPage.login("test-user@localhost", "password");
-            accountPage.assertCurrent();
+            TestAppHelper testAppHelper = new TestAppHelper(oauth, loginPage, appPage);
+            testAppHelper.login("test-user@localhost", "password");
+            appPage.assertCurrent();
 
             // Browser 2: Log in
-            driver2.navigate().to(accountPage.buildUri().toString());
+            driver2.navigate().to(oauth.getLoginFormUrl());
 
             assertThat(driver2.getTitle(), is("Sign in to " + testRealmName));
             driver2.findElement(By.id("username")).sendKeys("test-user@localhost");
             driver2.findElement(By.id("password")).sendKeys("password");
             driver2.findElement(By.id("password")).submit();
 
-            assertThat(driver2.getCurrentUrl(), Matchers.startsWith(accountPage.buildUri().toString()));
+            assertThat(driver2.getCurrentUrl(), Matchers.startsWith(oauth.APP_AUTH_ROOT));
 
             // Admin: set required action to VERIFY_EMAIL
             try (Closeable u1 = new UserAttributeUpdater(testRealm().users().get(testUserId))
@@ -806,17 +905,15 @@ public class RequiredActionEmailVerificationTest extends AbstractTestRealmKeyclo
                     .update()) {
                 // Browser 2: Refresh window
                 driver2.navigate().refresh();
-                assertThat(driver2.getCurrentUrl(), Matchers.startsWith(accountPage.buildUri().toString()));
+                assertThat(driver2.getCurrentUrl(), Matchers.startsWith(oauth.APP_AUTH_ROOT));
 
                 // Browser 1: Logout
-                accountPage.logOut();
+                testAppHelper.logout();
+                appPage.assertCurrent();
 
-                // Browser 1: Go to account page
-                accountPage.navigateTo();
 
                 // Browser 1: Log in
-                loginPage.assertCurrent();
-                loginPage.login("test-user@localhost", "password");
+                testAppHelper.login("test-user@localhost", "password");
 
                 verifyEmailPage.assertCurrent();
 
@@ -824,7 +921,7 @@ public class RequiredActionEmailVerificationTest extends AbstractTestRealmKeyclo
                 Assert.assertEquals(1, greenMail.getReceivedMessages().length);
                 MimeMessage message = greenMail.getLastReceivedMessage();
 
-                String verificationUrl = getPasswordResetEmailLink(message);
+                String verificationUrl = getEmailLink(message);
 
                 driver2.navigate().to(verificationUrl.trim());
 
@@ -837,9 +934,9 @@ public class RequiredActionEmailVerificationTest extends AbstractTestRealmKeyclo
                 assertThat(driver2.getPageSource(), Matchers.containsString("kc-info-message"));
                 assertThat(driver2.getPageSource(), Matchers.containsString("Your email address has been verified."));
 
-                // Browser 1: Expect land back to account after refresh
+                // Browser 1: Expect land back to app after refresh
                 driver.navigate().refresh();
-                accountPage.assertCurrent();
+                appPage.assertCurrent();
             }
         }
     }
@@ -849,12 +946,9 @@ public class RequiredActionEmailVerificationTest extends AbstractTestRealmKeyclo
         UserAttributeUpdater userAttributeUpdater = new UserAttributeUpdater(testRealm().users().get(testUserId));
         userAttributeUpdater.setEmailVerified(true).update();
 
-        final String testRealmName = testRealm().toRepresentation().getRealm();
-        accountPage.setAuthRealm(testRealmName);
-        oauth.realm(testRealmName).clientId("account").redirectUri(getAuthServerRoot() + "realms/" + testRealmName + "/account");
         loginPage.open();
         loginPage.login("test-user@localhost", "password");
-        accountPage.assertCurrent();
+        appPage.assertCurrent();
 
         userAttributeUpdater.setEmailVerified(false).setRequiredActions(RequiredAction.VERIFY_EMAIL).update();
 
@@ -865,18 +959,18 @@ public class RequiredActionEmailVerificationTest extends AbstractTestRealmKeyclo
         Assert.assertEquals(1, greenMail.getReceivedMessages().length);
         MimeMessage message = greenMail.getLastReceivedMessage();
 
-        String verificationUrl = getPasswordResetEmailLink(message);
+        String verificationUrl = getEmailLink(message);
 
         // confirm
         driver.navigate().to(verificationUrl);
 
-        // back to account, already logged in
-        accountPage.assertCurrent();
+        // back to app, already logged in
+        appPage.assertCurrent();
 
         // email should be verified and required actions empty
         UserRepresentation user = testRealm().users().get(testUserId).toRepresentation();
-        Assert.assertTrue(user.isEmailVerified());
-        Assert.assertThat(user.getRequiredActions(), Matchers.empty());
+        assertTrue(user.isEmailVerified());
+        assertThat(user.getRequiredActions(), Matchers.empty());
     }
 
     @Test
@@ -887,9 +981,6 @@ public class RequiredActionEmailVerificationTest extends AbstractTestRealmKeyclo
         UserAttributeUpdater userAttributeUpdater = new UserAttributeUpdater(testRealm().users().get(testUserId));
         userAttributeUpdater.setEmailVerified(false).update();
 
-        final String testRealmName = testRealm().toRepresentation().getRealm();
-        accountPage.setAuthRealm(testRealmName);
-        oauth.realm(testRealmName).clientId("account").redirectUri(getAuthServerRoot() + "realms/" + testRealmName + "/account");
         loginPage.open();
 
         String authSessionId = AuthenticationSessionFailoverClusterTest.getAuthSessionCookieValue(driver);
@@ -907,18 +998,18 @@ public class RequiredActionEmailVerificationTest extends AbstractTestRealmKeyclo
         Assert.assertEquals(1, greenMail.getReceivedMessages().length);
         MimeMessage message = greenMail.getLastReceivedMessage();
 
-        String verificationUrl = getPasswordResetEmailLink(message);
+        String verificationUrl = getEmailLink(message);
 
         // confirm
         driver.navigate().to(verificationUrl);
 
-        // back to account, already logged in
-        accountPage.assertCurrent();
+        // back to app, already logged in
+        appPage.assertCurrent();
 
         // email should be verified and required actions empty
         UserRepresentation user = testRealm().users().get(testUserId).toRepresentation();
-        Assert.assertTrue(user.isEmailVerified());
-        Assert.assertThat(user.getRequiredActions(), Matchers.empty());
+        assertTrue(user.isEmailVerified());
+        assertThat(user.getRequiredActions(), Matchers.empty());
     }
 
     @Test
@@ -926,12 +1017,9 @@ public class RequiredActionEmailVerificationTest extends AbstractTestRealmKeyclo
         UserAttributeUpdater userAttributeUpdater = new UserAttributeUpdater(testRealm().users().get(testUserId));
         userAttributeUpdater.setEmailVerified(true).update();
 
-        final String testRealmName = testRealm().toRepresentation().getRealm();
-        accountPage.setAuthRealm(testRealmName);
-        oauth.realm(testRealmName).clientId("account").redirectUri(getAuthServerRoot() + "realms/" + testRealmName + "/account");
         loginPage.open();
         loginPage.login("test-user@localhost", "password");
-        accountPage.assertCurrent();
+        appPage.assertCurrent();
 
         userAttributeUpdater.setEmailVerified(false).setRequiredActions(RequiredAction.VERIFY_EMAIL).update();
 
@@ -942,7 +1030,7 @@ public class RequiredActionEmailVerificationTest extends AbstractTestRealmKeyclo
         Assert.assertEquals(1, greenMail.getReceivedMessages().length);
         MimeMessage message = greenMail.getLastReceivedMessage();
 
-        String verificationUrl = getPasswordResetEmailLink(message);
+        String verificationUrl = getEmailLink(message);
 
         // confirm in the second browser
         driver2.navigate().to(verificationUrl);
@@ -956,9 +1044,7 @@ public class RequiredActionEmailVerificationTest extends AbstractTestRealmKeyclo
         assertThat(driver2.getPageSource(), Matchers.containsString("kc-info-message"));
         assertThat(driver2.getPageSource(), Matchers.containsString("Your email address has been verified."));
 
-        final WebElement backToApplicationLink = driver2.findElement(By.linkText("« Back to Application"));
-        assertThat(backToApplicationLink, Matchers.notNullValue());
-        backToApplicationLink.click();
+        driver2.navigate().to(oauth.getLoginFormUrl());
 
         // login page should be shown in the second browser
         assertThat(driver2.getPageSource(), Matchers.containsString("kc-login"));
@@ -966,12 +1052,12 @@ public class RequiredActionEmailVerificationTest extends AbstractTestRealmKeyclo
 
         // email should be verified and required actions empty
         UserRepresentation user = testRealm().users().get(testUserId).toRepresentation();
-        Assert.assertTrue(user.isEmailVerified());
-        Assert.assertThat(user.getRequiredActions(), Matchers.empty());
+        assertTrue(user.isEmailVerified());
+        assertThat(user.getRequiredActions(), Matchers.empty());
 
-        // after refresh in the first browser the account console should be shown
+        // after refresh in the first browser the app should be shown
         driver.navigate().refresh();
-        accountPage.assertCurrent();
+        appPage.assertCurrent();
     }
 
     @Test
@@ -991,7 +1077,7 @@ public class RequiredActionEmailVerificationTest extends AbstractTestRealmKeyclo
 
         MimeMessage message = greenMail.getLastReceivedMessage();
 
-        String verificationUrl = getPasswordResetEmailLink(message);
+        String verificationUrl = getEmailLink(message);
 
         try {
             setTimeOffset(360);
@@ -1016,7 +1102,7 @@ public class RequiredActionEmailVerificationTest extends AbstractTestRealmKeyclo
         assertEquals(1, greenMail.getReceivedMessages().length);
 
         MimeMessage message = greenMail.getReceivedMessages()[0];
-        String verificationUrl = getPasswordResetEmailLink(message);
+        String verificationUrl = getEmailLink(message);
 
         UserResource user = testRealm().users().get(testUserId);
         UserRepresentation userRep = user.toRepresentation();
@@ -1026,5 +1112,76 @@ public class RequiredActionEmailVerificationTest extends AbstractTestRealmKeyclo
         driver.navigate().to(verificationUrl.trim());
         errorPage.assertCurrent();
         assertEquals("The link you clicked is an old stale link and is no longer valid. Maybe you have already verified your email.", errorPage.getError());
+    }
+
+    @Test
+    @EnableFeature(value = Profile.Feature.UPDATE_EMAIL, skipRestart = true)
+    public void actionTokenWithInvalidRequiredActions() throws IOException {
+        // Send email with required action
+        testRealm().users().get(testUserId).executeActionsEmail(List.of(RequiredAction.UPDATE_EMAIL.name()));
+
+        Assert.assertEquals(1, greenMail.getReceivedMessages().length);
+        MimeMessage message = greenMail.getLastReceivedMessage();
+
+        MailUtils.EmailBody body = MailUtils.getBody(message);
+        assertThat(body, notNullValue());
+
+        final String link = MailUtils.getLink(body.getText());
+        assertThat(link, notNullValue());
+
+        // Disable feature and the required action UPDATE_EMAIL provider is not present
+        testingClient.disableFeature(Profile.Feature.UPDATE_EMAIL);
+
+        driver.navigate().to(link);
+
+        errorPage.assertCurrent();
+
+        // Required action included in the action token is not valid anymore, because we don't know the provider for it
+        assertThat(errorPage.getError(), is("Required actions included in the link are not valid"));
+    }
+
+    @Test
+    public void testVerifyEmailWithNoEmailAndVerifyProfile() throws Exception {
+        UserResource user = testRealm().users().get(testUserId);
+        UserRepresentation userRep = user.toRepresentation();
+        userRep.setEmail("");
+        user.update(userRep);
+
+        loginPage.open();
+        loginPage.login("test-user@localhost", "password");
+
+        // verify profile should be presented first as the verify email is ignored without email
+        verifyProfilePage.assertCurrent();
+        events.expectRequiredAction(EventType.VERIFY_PROFILE)
+                .user(testUserId)
+                .detail(Details.FIELDS_TO_UPDATE, UserModel.EMAIL)
+                .assertEvent();
+
+        verifyProfilePage.updateEmail("test-user@localhost", "test-user", "test-user");
+
+        verifyEmailPage.assertCurrent();
+
+        events.expectRequiredAction(EventType.UPDATE_PROFILE)
+                .user(testUserId)
+                .detail(Details.UPDATED_EMAIL, "test-user@localhost")
+                .assertEvent();
+
+        // verify email is presented now
+        Assert.assertEquals(1, greenMail.getReceivedMessages().length);
+
+        final MimeMessage message = greenMail.getLastReceivedMessage();
+
+        final String verificationUrl = getEmailLink(message);
+
+        // confirm
+        driver.navigate().to(verificationUrl);
+
+        // back to app, already logged in
+        appPage.assertCurrent();
+
+        // email should be verified and required actions empty
+        userRep = user.toRepresentation();
+        assertTrue(userRep.isEmailVerified());
+        assertThat(userRep.getRequiredActions(), Matchers.empty());
     }
 }

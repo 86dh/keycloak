@@ -42,6 +42,7 @@ import org.jboss.logging.Logger;
 import org.keycloak.admin.client.Keycloak;
 import org.keycloak.common.crypto.FipsMode;
 import org.keycloak.common.util.StringPropertyReplacer;
+import org.keycloak.common.util.SystemEnvProperties;
 import org.keycloak.representations.idm.RealmRepresentation;
 import org.keycloak.services.error.KeycloakErrorHandler;
 import org.keycloak.testsuite.ProfileAssume;
@@ -72,7 +73,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
-import javax.ws.rs.NotFoundException;
+import jakarta.ws.rs.NotFoundException;
 import javax.xml.parsers.DocumentBuilder;
 import javax.xml.parsers.DocumentBuilderFactory;
 import javax.xml.parsers.ParserConfigurationException;
@@ -131,7 +132,7 @@ public class AuthServerTestEnricher {
 
     public static final String AUTH_SERVER_FIPS_MODE_PROPERTY = "auth.server.fips.mode";
 
-    public static final FipsMode AUTH_SERVER_FIPS_MODE = FipsMode.valueOf(System.getProperty(AUTH_SERVER_FIPS_MODE_PROPERTY, FipsMode.disabled.toString()));
+    public static final FipsMode AUTH_SERVER_FIPS_MODE = FipsMode.valueOfOption(System.getProperty(AUTH_SERVER_FIPS_MODE_PROPERTY, FipsMode.DISABLED.toString()));
 
     public static final String CACHE_SERVER_LIFECYCLE_SKIP_PROPERTY = "cache.server.lifecycle.skip";
     public static final boolean CACHE_SERVER_LIFECYCLE_SKIP = Boolean.parseBoolean(System.getProperty(CACHE_SERVER_LIFECYCLE_SKIP_PROPERTY, "false"));
@@ -235,12 +236,12 @@ public class AuthServerTestEnricher {
                     .filter(c -> c.getQualifier().startsWith("cache-server-"))
                     .sorted((a, b) -> a.getQualifier().compareTo(b.getQualifier()))
                     .forEach(containerInfo -> {
-                        
+
                         log.info(String.format("cache container: %s", containerInfo.getQualifier()));
-                        
+
                         int prefixSize = containerInfo.getQualifier().lastIndexOf("-") + 1;
                         int dcIndex = Integer.parseInt(containerInfo.getQualifier().substring(prefixSize)) - 1;
-                        
+
                         suiteContext.addCacheServerInfo(dcIndex, containerInfo);
                     });
 
@@ -294,6 +295,8 @@ public class AuthServerTestEnricher {
         }
 
         if (START_MIGRATION_CONTAINER) {
+            suiteContext.getMigrationContext().setRunningMigrationTest(true);
+
             // init migratedAuthServerInfo
             for (ContainerInfo container : suiteContext.getContainers()) {
                 // migrated auth server
@@ -374,6 +377,12 @@ public class AuthServerTestEnricher {
     }
 
     public void startAuthContainer(@Observes(precedence = 0) StartSuiteContainers event) {
+        // this property can be used to skip start of auth-server before suite
+        // it might be useful for running some specific tests locally, e.g. when running standalone ZeroDowtime*Test
+        if (Boolean.getBoolean("keycloak.testsuite.skip.start.auth.server")) {
+            log.debug("Skipping the start of auth server before suite");
+            return;
+        }
         //frontend-only (either load-balancer or auth-server)
         log.debug("Starting auth server before suite");
 
@@ -430,7 +439,7 @@ public class AuthServerTestEnricher {
         log.infof("Running SQL script created by liquibase during manual migration flow", sqlScriptPath);
         String prefix = "keycloak.connectionsJpa.";
         String jdbcDriver = System.getProperty(prefix + "driver");
-        String dbUrl = StringPropertyReplacer.replaceProperties(System.getProperty(prefix + "url"));
+        String dbUrl = StringPropertyReplacer.replaceProperties(System.getProperty(prefix + "url"), SystemEnvProperties.UNFILTERED::getProperty);
         String dbUser = System.getProperty(prefix + "user");
         String dbPassword = System.getProperty(prefix + "password");
 
@@ -734,6 +743,7 @@ public class AuthServerTestEnricher {
         }
 
         TestContext testContext = testContextProducer.get();
+        testContext.runAfterClassActions();
 
         Keycloak adminClient = testContext.getAdminClient();
         KeycloakTestingClient testingClient = testContext.getTestingClient();

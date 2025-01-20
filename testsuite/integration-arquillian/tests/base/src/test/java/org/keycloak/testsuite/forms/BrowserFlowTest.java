@@ -18,7 +18,6 @@ import org.keycloak.authentication.authenticators.conditional.ConditionalRoleAut
 import org.keycloak.authentication.authenticators.conditional.ConditionalUserAttributeValueFactory;
 import org.keycloak.authentication.authenticators.conditional.ConditionalUserConfiguredAuthenticatorFactory;
 import org.keycloak.authentication.requiredactions.WebAuthnRegisterFactory;
-import org.keycloak.common.Profile;
 import org.keycloak.events.Details;
 import org.keycloak.models.AuthenticationExecutionModel;
 import org.keycloak.models.AuthenticationExecutionModel.Requirement;
@@ -37,7 +36,6 @@ import org.keycloak.testsuite.ActionURIUtils;
 import org.keycloak.testsuite.AssertEvents;
 import org.keycloak.testsuite.admin.ApiUtil;
 import org.keycloak.testsuite.admin.authentication.AbstractAuthenticationTest;
-import org.keycloak.testsuite.arquillian.annotation.DisableFeature;
 import org.keycloak.testsuite.auth.page.login.OneTimeCode;
 import org.keycloak.testsuite.authentication.SetUserAttributeAuthenticatorFactory;
 import org.keycloak.testsuite.broker.SocialLoginTest;
@@ -62,6 +60,7 @@ import java.util.function.Consumer;
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.Matchers.containsString;
 import static org.keycloak.testsuite.admin.AbstractAdminTest.loadJson;
+import static org.keycloak.testsuite.broker.BrokerTestTools.waitForPage;
 import static org.keycloak.testsuite.broker.SocialLoginTest.Provider.GITHUB;
 import static org.keycloak.testsuite.broker.SocialLoginTest.Provider.GITLAB;
 import static org.keycloak.testsuite.broker.SocialLoginTest.Provider.GOOGLE;
@@ -182,6 +181,7 @@ public class BrowserFlowTest extends AbstractTestRealmKeycloakTest {
         Assert.assertTrue(oneTimeCodePage.isOtpLabelPresent());
         loginTotpPage.assertCurrent();
         loginTotpPage.assertOtpCredentialSelectorAvailability(true);
+        loginTotpPage.selectOtpCredential("first");
 
         // Check that selected credential is "first"
         Assert.assertEquals("first", loginTotpPage.getSelectedOtpCredential());
@@ -208,6 +208,7 @@ public class BrowserFlowTest extends AbstractTestRealmKeycloakTest {
         Assert.assertTrue(oneTimeCodePage.isOtpLabelPresent());
         loginTotpPage.assertCurrent();
         loginTotpPage.assertOtpCredentialSelectorAvailability(true);
+        loginTotpPage.selectOtpCredential(orderedCredentials.get(0));
 
         // Check that preferred credential is selected
         Assert.assertEquals(orderedCredentials.get(0), loginTotpPage.getSelectedOtpCredential());
@@ -253,7 +254,7 @@ public class BrowserFlowTest extends AbstractTestRealmKeycloakTest {
 
     // A conditional flow without conditional authenticator should automatically be disabled
     @Test
-    
+
     public void testFlowDisabledWhenConditionalAuthenticatorIsMissing() {
         try {
             configureBrowserFlowWithConditionalSubFlowHavingConditionalAuthenticator("browser - non missing conditional authenticator", true);
@@ -289,7 +290,7 @@ public class BrowserFlowTest extends AbstractTestRealmKeycloakTest {
 
     // A conditional flow with disabled conditional authenticator should automatically be disabled
     @Test
-    
+
     public void testFlowDisabledWhenConditionalAuthenticatorIsDisabled() {
         try {
             configureBrowserFlowWithConditionalSubFlowHavingDisabledConditionalAuthenticator("browser - disabled conditional authenticator");
@@ -322,7 +323,7 @@ public class BrowserFlowTest extends AbstractTestRealmKeycloakTest {
     // Configure a conditional authenticator in a non-conditional sub-flow
     // In such case, the flow is evaluated and the conditional authenticator is considered as disabled
     @Test
-    
+
     public void testConditionalAuthenticatorInNonConditionalFlow() {
         try {
             configureBrowserFlowWithConditionalAuthenticatorInNonConditionalFlow();
@@ -365,7 +366,7 @@ public class BrowserFlowTest extends AbstractTestRealmKeycloakTest {
     // user-with-two-configured-otp has the "user" role and should be asked for an OTP code
     // user-with-one-configured-otp does not have the role. He should not be asked for an OTP code
     @Test
-    
+
     public void testConditionalRoleAuthenticator() {
         String requiredRole = "user";
         // A browser flow is configured with an OTPForm for users having the role "user"
@@ -393,7 +394,7 @@ public class BrowserFlowTest extends AbstractTestRealmKeycloakTest {
     // user-with-two-configured-otp has the "composite-realm-role-1" role and should be asked for an OTP code
     // user-with-one-configured-otp does not have the role. He should not be asked for an OTP code
     @Test
-    
+
     public void testConditionalRoleAuthenticatorWithRealmRoleIncludedInCompositeRealmRole() {
 
         // Create composite-realm-role-1
@@ -440,7 +441,7 @@ public class BrowserFlowTest extends AbstractTestRealmKeycloakTest {
     // user-with-two-configured-otp has the "composite-client-role-1" role and should be asked for an OTP code
     // user-with-one-configured-otp does not have the role. He should not be asked for an OTP code
     @Test
-    
+
     public void testConditionalRoleAuthenticatorWithClientRoleIncludedInCompositeClientRole() {
 
         String clientName = "test-app";
@@ -522,7 +523,7 @@ public class BrowserFlowTest extends AbstractTestRealmKeycloakTest {
     // Configure a conditional authenticator with a condition which change while the flow evaluation
     // In such case, all the required authenticator inside the subflow should be evaluated even if the condition has changed
     @Test
-    
+
     public void testConditionalAuthenticatorWithConditionalSubFlowWithChangingConditionWhileFlowEvaluation() {
         try {
             configureBrowserFlowWithConditionalSubFlowWithChangingConditionWhileFlowEvaluation();
@@ -543,8 +544,6 @@ public class BrowserFlowTest extends AbstractTestRealmKeycloakTest {
     }
 
     @Test
-    
-    @DisableFeature(value = Profile.Feature.ACCOUNT2, skipRestart = true) // TODO remove this (KEYCLOAK-16228)
     public void testAlternativeNonInteractiveExecutorInSubflow() {
         final String newFlowAlias = "browser - alternative non-interactive executor";
         testingClient.server("test").run(session -> FlowUtil.inCurrentRealm(session).copyBrowserFlow(newFlowAlias));
@@ -568,6 +567,8 @@ public class BrowserFlowTest extends AbstractTestRealmKeycloakTest {
             // Check that Keycloak is redirecting us to the Keycloak account management page
             WebElement aHref = driver.findElement(By.tagName("a"));
             driver.get(aHref.getAttribute("href"));
+            // Waiting for account redirection from app page
+            waitForPage(driver, "Account Management", true);
             assertThat(driver.getTitle(), containsString("Account Management"));
         } finally {
             revertFlows("browser - alternative non-interactive executor");
@@ -596,7 +597,7 @@ public class BrowserFlowTest extends AbstractTestRealmKeycloakTest {
     }
 
     @Test
-    
+
     public void testSwitchExecutionNotAllowedWithRequiredPasswordAndAlternativeOTP() {
         String newFlowAlias = "browser - copy 1";
         configureBrowserFlowWithRequiredPasswordFormAndAlternativeOTP(newFlowAlias);
@@ -632,7 +633,7 @@ public class BrowserFlowTest extends AbstractTestRealmKeycloakTest {
 
 
     @Test
-    
+
     public void testSocialProvidersPresentOnLoginUsernameOnlyPageIfConfigured() {
         String testRealm = "test";
         // Test setup - Configure the testing Keycloak instance with UsernameForm & PasswordForm (both REQUIRED) and OTPFormAuthenticator (ALTERNATIVE)
@@ -689,7 +690,7 @@ public class BrowserFlowTest extends AbstractTestRealmKeycloakTest {
     }
 
     @Test
-    
+
     public void testConditionalFlowWithConditionalAuthenticatorEvaluatingToFalseActsAsDisabled(){
         String newFlowAlias = "browser - copy 1";
         configureBrowserFlowWithConditionalFlowWithOTP(newFlowAlias);
@@ -708,7 +709,7 @@ public class BrowserFlowTest extends AbstractTestRealmKeycloakTest {
     }
 
     @Test
-    
+
     public void testConditionalFlowWithConditionalAuthenticatorEvaluatingToTrueActsAsRequired(){
         String newFlowAlias = "browser - copy 1";
         configureBrowserFlowWithConditionalFlowWithOTP(newFlowAlias);
@@ -770,7 +771,7 @@ public class BrowserFlowTest extends AbstractTestRealmKeycloakTest {
      * In this test the user is expected to have to log in with OTP
      */
     @Test
-    
+
     public void testConditionalFlowWithMultipleConditionalAuthenticatorsWithUserWithRoleAndOTP() {
         String newFlowAlias = "browser - copy 1";
         configureBrowserFlowWithConditionalFlowWithMultipleConditionalAuthenticators(newFlowAlias);
@@ -801,7 +802,7 @@ public class BrowserFlowTest extends AbstractTestRealmKeycloakTest {
      * In this test, the user is expected to have to login with username and password only, as the conditional branch evaluates to false, and is therefore DISABLED
      */
     @Test
-    
+
     public void testConditionalFlowWithMultipleConditionalAuthenticatorsWithUserWithRoleButNotOTP() {
         String newFlowAlias = "browser - copy 1";
         configureBrowserFlowWithConditionalFlowWithMultipleConditionalAuthenticators(newFlowAlias);
@@ -867,7 +868,7 @@ public class BrowserFlowTest extends AbstractTestRealmKeycloakTest {
      * and will instead raise an credential setup required error.
      */
     @Test
-    
+
     public void testLoginWithWithNoOTPCredentialAndNoRequiredActionProviderRegistered(){
         String newFlowAlias = "browser - copy 1";
         configureBrowserFlowWithRequiredOTP(newFlowAlias);
@@ -894,7 +895,7 @@ public class BrowserFlowTest extends AbstractTestRealmKeycloakTest {
      * and will instead raise an credential setup required error.
      */
     @Test
-    
+
     public void testLoginWithWithNoOTPCredentialAndRequiredActionProviderDisabled(){
         String newFlowAlias = "browser - copy 1";
         configureBrowserFlowWithRequiredOTP(newFlowAlias);
@@ -919,7 +920,7 @@ public class BrowserFlowTest extends AbstractTestRealmKeycloakTest {
      * has its requiredActionProvider enabled, than it will login and show the otpSetup page.
      */
     @Test
-    
+
     public void testLoginWithWithNoOTPCredential(){
         String newFlowAlias = "browser - copy 1";
         configureBrowserFlowWithRequiredOTP(newFlowAlias);;
@@ -962,7 +963,7 @@ public class BrowserFlowTest extends AbstractTestRealmKeycloakTest {
      * and will instead raise an credential setup required error.
      */
     @Test
-    
+
     public void testLoginWithWithNoWebAuthnCredentialAndRequiredActionProviderDisabled(){
         String newFlowAlias = "browser - copy 1";
         configureBrowserFlowWithRequiredWebAuthn(newFlowAlias);
@@ -985,7 +986,7 @@ public class BrowserFlowTest extends AbstractTestRealmKeycloakTest {
      * has its requiredActionProvider enabled, then it will login and show the WebAuthn registration page.
      */
     @Test
-    
+
     public void testLoginWithWithNoWebAuthnCredential(){
         String newFlowAlias = "browser - copy 1";
         configureBrowserFlowWithRequiredWebAuthn(newFlowAlias);
@@ -1028,7 +1029,7 @@ public class BrowserFlowTest extends AbstractTestRealmKeycloakTest {
      * then the selection mechanism will see that there's no viable alternative, and move on to the next execution (in this case the flow)
      */
     @Test
-    
+
     public void testLoginWithWithNoOTPCredentialAndAlternativeActionProvider(){
         String newFlowAlias = "browser - copy 1";
         configureBrowserFlowWithAlternativeOTPAndPassword(newFlowAlias);
@@ -1074,7 +1075,7 @@ public class BrowserFlowTest extends AbstractTestRealmKeycloakTest {
      * This test checks the error messages, when the credentials are invalid and UsernameForm and PasswordForm are separated.
      */
     @Test
-    
+
     public void testLoginMultiFactorWithWrongCredentialsMessage() {
         UserRepresentation user = testRealm().users().search("test-user@localhost").get(0);
         Assert.assertNotNull(user);
@@ -1156,7 +1157,7 @@ public class BrowserFlowTest extends AbstractTestRealmKeycloakTest {
      * then it will not try to create the required action, and will instead move to the next alternative
      */
     @Test
-    
+
     public void testLoginWithWithNoWebAuthnCredentialAndAlternativeActionProvider(){
         String newFlowAlias = "browser - copy 1";
         configureBrowserFlowWithAlternativeWebAuthnAndPassword(newFlowAlias);
@@ -1183,7 +1184,7 @@ public class BrowserFlowTest extends AbstractTestRealmKeycloakTest {
      * After login with password and fulfill the conditional subflow2, the subflow1 should be considered successful as well and the OTP authentication should not be needed
      */
     @Test
-    
+
     public void testLoginWithAlternativeOTPAndConditionalPassword(){
         String newFlowAlias = "browser - copy 2";
         configureBrowserFlowWithAlternativeOTPAndConditionalPassword(newFlowAlias);

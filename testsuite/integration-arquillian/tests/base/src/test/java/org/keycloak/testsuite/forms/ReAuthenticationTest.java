@@ -28,10 +28,13 @@ import org.jboss.arquillian.drone.api.annotation.Drone;
 import org.jboss.arquillian.graphene.page.Page;
 import org.jboss.arquillian.test.api.ArquillianResource;
 import org.junit.Test;
+import org.keycloak.OAuth2Constants;
 import org.keycloak.admin.client.resource.UserResource;
 import org.keycloak.authentication.authenticators.browser.PasswordFormFactory;
 import org.keycloak.authentication.authenticators.browser.UsernameFormFactory;
 import org.keycloak.models.AuthenticationExecutionModel;
+import org.keycloak.protocol.oidc.OIDCLoginProtocol;
+import org.keycloak.representations.AccessToken;
 import org.keycloak.representations.idm.FederatedIdentityRepresentation;
 import org.keycloak.representations.idm.IdentityProviderRepresentation;
 import org.keycloak.representations.idm.RealmRepresentation;
@@ -46,6 +49,7 @@ import org.keycloak.testsuite.pages.LoginPage;
 import org.keycloak.testsuite.pages.LoginTotpPage;
 import org.keycloak.testsuite.pages.LoginUsernameOnlyPage;
 import org.keycloak.testsuite.pages.PasswordPage;
+import org.keycloak.testsuite.util.BrowserTabUtil;
 import org.keycloak.testsuite.util.FederatedIdentityBuilder;
 import org.keycloak.testsuite.util.FlowUtil;
 import org.keycloak.testsuite.util.OAuthClient;
@@ -53,6 +57,7 @@ import org.openqa.selenium.By;
 import org.openqa.selenium.WebDriver;
 
 import static org.hamcrest.CoreMatchers.is;
+import static org.hamcrest.MatcherAssert.assertThat;
 import static org.keycloak.testsuite.admin.AbstractAdminTest.loadJson;
 import static org.keycloak.testsuite.broker.SocialLoginTest.Provider.GITHUB;
 import static org.keycloak.testsuite.broker.SocialLoginTest.Provider.GOOGLE;
@@ -282,7 +287,7 @@ public class ReAuthenticationTest extends AbstractTestRealmKeycloakTest {
         assertInfoMessageAboutReAuthenticate(true);
 
         // Check there is NO password field
-        Assert.assertThat(true, is(driver.findElements(By.id("password")).isEmpty()));
+        assertThat(true, is(driver.findElements(By.id("password")).isEmpty()));
 
         // Github present, Google hidden
         assertSocialButtonsPresent(true, false);
@@ -301,6 +306,103 @@ public class ReAuthenticationTest extends AbstractTestRealmKeycloakTest {
         BrowserFlowTest.revertFlows(testRealm(), "browser - identity first");
     }
 
+    @Test
+    public void restartLoginWithNewRootAuthSession() {
+        loginPage.open();
+        loginPage.login("test-user@localhost", "password");
+        String code = oauth.getCurrentQuery().get(OAuth2Constants.CODE);
+        OAuthClient.AccessTokenResponse response1 = oauth.doAccessTokenRequest(code, "password");
+
+        oauth.prompt(OIDCLoginProtocol.PROMPT_VALUE_LOGIN);
+        loginPage.open();
+        loginPage.clickResetLogin();
+        loginPage.login("john-doh@localhost", "password");
+
+        code = oauth.getCurrentQuery().get(OAuth2Constants.CODE);
+        OAuthClient.AccessTokenResponse response2 = oauth.doAccessTokenRequest(code, "password");
+
+
+        AccessToken accessToken1 = oauth.verifyToken(response1.getAccessToken());
+        AccessToken accessToken2 = oauth.verifyToken(response2.getAccessToken());
+
+        Assert.assertNotEquals(accessToken1.getSubject(), accessToken2.getSubject());
+        Assert.assertNotEquals(accessToken1.getSessionId(), accessToken2.getSessionId());
+    }
+
+    @Test
+    public void loginAfterExpiredUserSession() {
+        RealmRepresentation rep = testRealm().toRepresentation();
+        Integer originalSsoSessionIdleTimeout = rep.getSsoSessionIdleTimeout();
+        Integer originalSsoSessionMaxLifespan = rep.getSsoSessionMaxLifespan();
+
+        rep.setSsoSessionIdleTimeout(10);
+        rep.setSsoSessionMaxLifespan(10);
+        realmsResouce().realm(rep.getRealm()).update(rep);
+
+        loginPage.open();
+        driver.navigate().refresh();
+        loginPage.login("test-user@localhost", "password");
+
+        String code = oauth.getCurrentQuery().get(OAuth2Constants.CODE);
+        OAuthClient.AccessTokenResponse response1 = oauth.doAccessTokenRequest(code, "password");
+
+        //set time offset after user session expiration (10s) but before accessCodeLifespanLogin (1800s) and accessCodeLifespan (60s)
+        setTimeOffset(20);
+
+        loginPage.open();
+        loginPage.login("john-doh@localhost", "password");
+
+        code = oauth.getCurrentQuery().get(OAuth2Constants.CODE);
+        OAuthClient.AccessTokenResponse response2 = oauth.doAccessTokenRequest(code, "password");
+
+        AccessToken accessToken1 = oauth.verifyToken(response1.getAccessToken());
+        AccessToken accessToken2 = oauth.verifyToken(response2.getAccessToken());
+
+        Assert.assertNotEquals(accessToken1.getSubject(), accessToken2.getSubject());
+        Assert.assertNotEquals(accessToken1.getSessionId(), accessToken2.getSessionId());
+
+        setTimeOffset(0);
+        rep.setSsoSessionIdleTimeout(originalSsoSessionIdleTimeout);
+        rep.setSsoSessionMaxLifespan(originalSsoSessionMaxLifespan);
+        realmsResouce().realm(rep.getRealm()).update(rep);
+    }
+
+    @Test
+    public void loginAfterLogoutWithDifferentSessionId() {
+        BrowserTabUtil tabUtil = BrowserTabUtil.getInstanceAndSetEnv(driver);
+
+        assertThat(tabUtil.getCountOfTabs(), Matchers.is(1));
+        oauth.openLoginForm();
+        loginPage.assertCurrent();
+
+        tabUtil.newTab(oauth.getLoginFormUrl());
+        assertThat(tabUtil.getCountOfTabs(), Matchers.equalTo(2));
+        oauth.openLoginForm();
+
+        tabUtil.closeTab(tabUtil.getCountOfTabs() - 1);
+        assertThat(tabUtil.getCountOfTabs(), Matchers.equalTo(1));
+
+        tabUtil.switchToTab(0);
+        loginPage.assertCurrent();
+
+        loginPage.login("test-user@localhost", "password");
+        String code = oauth.getCurrentQuery().get(OAuth2Constants.CODE);
+        OAuthClient.AccessTokenResponse response1 = oauth.doAccessTokenRequest(code, "password");
+        AccessToken accessToken1 = oauth.verifyToken(response1.getAccessToken());
+
+        oauth.doLogout(response1.getRefreshToken(), "password");
+
+        oauth.openLoginForm();
+        loginPage.assertCurrent();
+        loginPage.login("test-user@localhost", "password");
+        code = oauth.getCurrentQuery().get(OAuth2Constants.CODE);
+        OAuthClient.AccessTokenResponse response2 = oauth.doAccessTokenRequest(code, "password");
+        AccessToken accessToken2 = oauth.verifyToken(response2.getAccessToken());
+
+        Assert.assertNotEquals(accessToken1.getId(), accessToken2.getId());
+        Assert.assertNotEquals(accessToken1.getSessionId(), accessToken2.getSessionId());
+    }
+
     private void setupIdentityFirstFlow() {
         String newFlowAlias = "browser - identity first";
         testingClient.server("test").run(session -> FlowUtil.inCurrentRealm(session).copyBrowserFlow(newFlowAlias));
@@ -316,19 +418,19 @@ public class ReAuthenticationTest extends AbstractTestRealmKeycloakTest {
 
 
     private void assertUsernameFieldAndOtherFields(boolean expectPresent) {
-        Assert.assertThat(expectPresent, is(loginPage.isUsernameInputPresent()));
-        Assert.assertThat(expectPresent, is(loginPage.isRegisterLinkPresent()));
-        Assert.assertThat(expectPresent, is(loginPage.isRememberMeCheckboxPresent()));
+        assertThat(expectPresent, is(loginPage.isUsernameInputPresent()));
+        assertThat(expectPresent, is(loginPage.isRegisterLinkPresent()));
+        assertThat(expectPresent, is(loginPage.isRememberMeCheckboxPresent()));
     }
 
     private void assertSocialButtonsPresent(boolean expectGithubPresent, boolean expectGooglePresent) {
-        Assert.assertThat(expectGithubPresent, is(loginPage.isSocialButtonPresent("github")));
-        Assert.assertThat(expectGooglePresent, is(loginPage.isSocialButtonPresent("google")));
+        assertThat(expectGithubPresent, is(loginPage.isSocialButtonPresent("github")));
+        assertThat(expectGooglePresent, is(loginPage.isSocialButtonPresent("google")));
     }
 
     private void assertInfoMessageAboutReAuthenticate(boolean expectPresent) {
         Matcher<String> expectedInfo = expectPresent ? is("Please re-authenticate to continue") : Matchers.nullValue(String.class);
-        Assert.assertThat(loginPage.getInfoMessage(), expectedInfo);
+        assertThat(loginPage.getInfoMessage(), expectedInfo);
     }
 
 }

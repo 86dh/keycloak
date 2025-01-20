@@ -19,15 +19,16 @@
 package org.keycloak.testsuite.admin;
 
 import java.util.List;
-import javax.ws.rs.NotAuthorizedException;
-import javax.ws.rs.core.Response;
+import jakarta.ws.rs.NotAuthorizedException;
+import jakarta.ws.rs.core.Response;
+import java.util.Map;
 import org.junit.Assert;
 import org.junit.Rule;
 import org.junit.Test;
-import org.junit.rules.ExpectedException;
 import org.keycloak.admin.client.Keycloak;
 import org.keycloak.admin.client.resource.ClientResource;
 import org.keycloak.admin.client.resource.RealmResource;
+import org.keycloak.authentication.authenticators.client.X509ClientAuthenticator;
 import org.keycloak.common.constants.ServiceAccountConstants;
 import org.keycloak.models.AdminRoles;
 import org.keycloak.models.Constants;
@@ -43,6 +44,7 @@ import org.keycloak.testsuite.util.ClientBuilder;
 import org.keycloak.testsuite.util.ClientScopeBuilder;
 import org.keycloak.testsuite.util.RealmBuilder;
 import org.keycloak.testsuite.util.UserBuilder;
+import java.util.Objects;
 
 /**
  * Test for the various "Advanced" scenarios of java admin-client
@@ -52,7 +54,7 @@ import org.keycloak.testsuite.util.UserBuilder;
 public class AdminClientTest extends AbstractKeycloakTest {
 
     private static String realmName;
-    
+
     private static String userId;
     private static String userName;
 
@@ -60,12 +62,13 @@ public class AdminClientTest extends AbstractKeycloakTest {
     private static String clientId;
     private static String clientSecret;
 
+    private static String x509ClientUUID;
+    private static String x509ClientId;
+
+    private static String x509UserName;
+
     @Rule
     public AssertEvents events = new AssertEvents(this);
-
-    @Rule
-    public ExpectedException expectedException = ExpectedException.none();
-
 
     @Override
     public void beforeAbstractKeycloakTest() throws Exception {
@@ -76,29 +79,46 @@ public class AdminClientTest extends AbstractKeycloakTest {
     public void addTestRealms(List<RealmRepresentation> testRealms) {
         realmName = "test";
         RealmBuilder realm = RealmBuilder.create().name(realmName)
-                .privateKey("MIICXAIBAAKBgQCrVrCuTtArbgaZzL1hvh0xtL5mc7o0NqPVnYXkLvgcwiC3BjLGw1tGEGoJaXDuSaRllobm53JBhjx33UNv+5z/UMG4kytBWxheNVKnL6GgqlNabMaFfPLPCF8kAgKnsi79NMo+n6KnSY8YeUmec/p2vjO2NjsSAVcWEQMVhJ31LwIDAQABAoGAfmO8gVhyBxdqlxmIuglbz8bcjQbhXJLR2EoS8ngTXmN1bo2L90M0mUKSdc7qF10LgETBzqL8jYlQIbt+e6TH8fcEpKCjUlyq0Mf/vVbfZSNaVycY13nTzo27iPyWQHK5NLuJzn1xvxxrUeXI6A2WFpGEBLbHjwpx5WQG9A+2scECQQDvdn9NE75HPTVPxBqsEd2z10TKkl9CZxu10Qby3iQQmWLEJ9LNmy3acvKrE3gMiYNWb6xHPKiIqOR1as7L24aTAkEAtyvQOlCvr5kAjVqrEKXalj0Tzewjweuxc0pskvArTI2Oo070h65GpoIKLc9jf+UA69cRtquwP93aZKtW06U8dQJAF2Y44ks/mK5+eyDqik3koCI08qaC8HYq2wVl7G2QkJ6sbAaILtcvD92ToOvyGyeE0flvmDZxMYlvaZnaQ0lcSQJBAKZU6umJi3/xeEbkJqMfeLclD27XGEFoPeNrmdx0q10Azp4NfJAY+Z8KRyQCR2BEG+oNitBOZ+YXF9KCpH3cdmECQHEigJhYg+ykOvr1aiZUMFT72HU0jnmQe2FVekuG+LJUt2Tm7GtMjTFoGpf0JwrVuZN39fOYAlo+nTixgeW7X8Y=")
-                .publicKey("MIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQKBgQCrVrCuTtArbgaZzL1hvh0xtL5mc7o0NqPVnYXkLvgcwiC3BjLGw1tGEGoJaXDuSaRllobm53JBhjx33UNv+5z/UMG4kytBWxheNVKnL6GgqlNabMaFfPLPCF8kAgKnsi79NMo+n6KnSY8YeUmec/p2vjO2NjsSAVcWEQMVhJ31LwIDAQAB")
                 .testEventListener();
 
-        clientUUID = KeycloakModelUtils.generateId();
         clientId = "service-account-cl";
         clientSecret = "secret1";
         ClientRepresentation enabledAppWithSkipRefreshToken = ClientBuilder.create()
-                .id(clientUUID)
                 .clientId(clientId)
                 .secret(clientSecret)
                 .serviceAccountsEnabled(true)
                 .build();
         realm.client(enabledAppWithSkipRefreshToken);
 
+        x509ClientId = "x509-client-sa";
+        ClientRepresentation x509ServiceAccountClient = ClientBuilder.create()
+              .clientId(x509ClientId)
+              .serviceAccountsEnabled(true)
+              .build();
+        x509ServiceAccountClient.setClientAuthenticatorType(X509ClientAuthenticator.PROVIDER_ID);
+        x509ServiceAccountClient.setAttributes(Map.of(
+            X509ClientAuthenticator.ATTR_SUBJECT_DN, "(.*?)(?:$)",
+            X509ClientAuthenticator.ATTR_ALLOW_REGEX_PATTERN_COMPARISON, "true"));
+        realm.client(x509ServiceAccountClient);
+
         userId = KeycloakModelUtils.generateId();
         userName = ServiceAccountConstants.SERVICE_ACCOUNT_USER_PREFIX + enabledAppWithSkipRefreshToken.getClientId();
         UserBuilder serviceAccountUser = UserBuilder.create()
-                .id(userId)
                 .username(userName)
                 .serviceAccountId(enabledAppWithSkipRefreshToken.getClientId())
                 .role(Constants.REALM_MANAGEMENT_CLIENT_ID, AdminRoles.REALM_ADMIN);
         realm.user(serviceAccountUser);
+
+        // This user is associated with the x509-client-sa service account above and
+        // give the service account a service account role "realm-management:realm-admin".
+        // Without the "realm-management:realm-admin" role we won't be able to test any actual
+        // admin call.
+        x509UserName = ServiceAccountConstants.SERVICE_ACCOUNT_USER_PREFIX + x509ServiceAccountClient.getClientId();
+        UserBuilder x509ServiceAccountUser = UserBuilder.create()
+            .username(x509UserName)
+            .serviceAccountId(x509ServiceAccountClient.getClientId())
+            .role(Constants.REALM_MANAGEMENT_CLIENT_ID, AdminRoles.REALM_ADMIN);
+        realm.user(x509ServiceAccountUser);
 
         UserBuilder defaultUser = UserBuilder.create()
                 .id(KeycloakModelUtils.generateId())
@@ -108,6 +128,16 @@ public class AdminClientTest extends AbstractKeycloakTest {
         realm.user(defaultUser);
 
         testRealms.add(realm.build());
+    }
+
+    @Override
+    public void importRealm(RealmRepresentation realm) {
+        super.importRealm(realm);
+        if (Objects.equals(realm.getRealm(), realmName)) {
+            x509ClientUUID = adminClient.realm(realmName).clients().findByClientId(x509ClientId).get(0).getId();
+            clientUUID = adminClient.realm(realmName).clients().findByClientId(clientId).get(0).getId();
+            userId = adminClient.realm(realmName).users().searchByUsername(userName, true).get(0).getId();
+        }
     }
 
     @Test
@@ -175,8 +205,7 @@ public class AdminClientTest extends AbstractKeycloakTest {
 
         // we need to create custom scope after import, otherwise the default scopes are missing.
         final String scopeName = "myScope";
-        final String scopeId = KeycloakModelUtils.generateId();
-        createScope(testRealm, scopeName, scopeId);
+        String scopeId = createScope(testRealm, scopeName, KeycloakModelUtils.generateId());
         testRealm.clients().get(clientUUID).addOptionalClientScope(scopeId);
 
         // with scope
@@ -184,12 +213,40 @@ public class AdminClientTest extends AbstractKeycloakTest {
             clientId, clientSecret, scopeName)) {
             final AccessTokenResponse accessToken = adminClient.tokenManager().getAccessToken();
             Assert.assertTrue(accessToken.getScope().contains(scopeName));
+            Assert.assertNotNull(adminClient.realm(realmName).clientScopes().get(scopeId).toRepresentation());
         }
         // without scope
         try (Keycloak adminClient = AdminClientUtil.createAdminClientWithClientCredentials(realmName,
             clientId, clientSecret, null)) {
             final AccessTokenResponse accessToken = adminClient.tokenManager().getAccessToken();
             Assert.assertFalse(accessToken.getScope().contains(scopeName));
+            Assert.assertNotNull(adminClient.realm(realmName).clientScopes().get(scopeId).toRepresentation());
+        }
+    }
+
+    // A client secret in not necessary when authentication is
+    // performed via X.509 authorizer.
+    @Test
+    public void noClientSecretWithClientCredentialsAuthSuccess() throws Exception {
+        final RealmResource testRealm = adminClient.realm(realmName);
+
+        final String scopeName = "dummyScope";
+        String scopeId = createScope(testRealm, scopeName, KeycloakModelUtils.generateId());
+        testRealm.clients().get(x509ClientUUID).addOptionalClientScope(scopeId);
+
+        // with scope and no client secret
+        try (Keycloak adminClient = AdminClientUtil.
+            createMTlsAdminClientWithClientCredentialsWithoutSecret(realmName, x509ClientId, scopeName)) {
+            final AccessTokenResponse accessToken = adminClient.tokenManager().getAccessToken();
+            Assert.assertTrue(accessToken.getScope().contains(scopeName));
+            Assert.assertNotNull(adminClient.realm(realmName).clientScopes().get(scopeId).toRepresentation());
+        }
+        // without scope and no client secret
+        try (Keycloak adminClient = AdminClientUtil.
+            createMTlsAdminClientWithClientCredentialsWithoutSecret(realmName, x509ClientId, null)) {
+            final AccessTokenResponse accessToken = adminClient.tokenManager().getAccessToken();
+            Assert.assertFalse(accessToken.getScope().contains(scopeName));
+            Assert.assertNotNull(adminClient.realm(realmName).clientScopes().get(scopeId).toRepresentation());
         }
     }
 
@@ -200,11 +257,13 @@ public class AdminClientTest extends AbstractKeycloakTest {
         client.update(clientRep);
     }
 
-    private void createScope(RealmResource testRealm, String scopeName, String scopeId) {
+    private String createScope(RealmResource testRealm, String scopeName, String scopeId) {
         final ClientScopeRepresentation testScope =
             ClientScopeBuilder.create().name(scopeName).protocol("openid-connect").build();
         testScope.setId(scopeId);
-        final Response scope = testRealm.clientScopes().create(testScope);
-        Assert.assertEquals(201, scope.getStatus());
+        try (Response response = testRealm.clientScopes().create(testScope)) {
+            Assert.assertEquals(201, response.getStatus());
+            return ApiUtil.getCreatedId(response);
+        }
     }
 }

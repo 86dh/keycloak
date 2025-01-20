@@ -16,12 +16,19 @@
  */
 
 package org.keycloak.http;
+
+import jakarta.ws.rs.core.NewCookie;
+
 /**
  * <p>Represents an out coming HTTP response.
  *
  * <p>Instances of this class can be obtained from {@link org.keycloak.models.KeycloakContext#getHttpResponse}.
  */
 public interface HttpResponse {
+    /**
+     * Gets a status code.
+     */
+    int getStatus();
 
     /**
      * Sets a status code.
@@ -45,4 +52,12 @@ public interface HttpResponse {
      * @param value the header value
      */
     void setHeader(String name, String value);
+
+    /**
+     * Sets a new cookie only if not yet set.
+     *
+     * @param cookie the cookie
+     */
+    void setCookieIfAbsent(NewCookie cookie);
+
 }

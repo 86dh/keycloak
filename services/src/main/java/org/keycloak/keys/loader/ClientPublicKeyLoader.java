@@ -72,7 +72,7 @@ public class ClientPublicKeyLoader implements PublicKeyLoader {
             String jwksUrl = config.getJwksUrl();
             jwksUrl = ResolveRelative.resolveRelativeUri(session, client.getRootUrl(), jwksUrl);
             JSONWebKeySet jwks = JWKSHttpUtils.sendJwksRequest(session, jwksUrl);
-            return JWKSUtils.getKeyWrappersForUse(jwks, keyUse);
+            return JWKSUtils.getKeyWrappersForUse(jwks, keyUse, true);
         } else if (config.isUseJwksString()) {
             JSONWebKeySet jwks = JsonSerialization.readValue(config.getJwksString(), JSONWebKeySet.class);
             return JWKSUtils.getKeyWrappersForUse(jwks, keyUse);
@@ -114,6 +114,7 @@ public class ClientPublicKeyLoader implements PublicKeyLoader {
             keyWrapper.setPublicKey(clientCert.getPublicKey());
             keyWrapper.setType(clientCert.getPublicKey().getAlgorithm());
             keyWrapper.setCertificate(clientCert);
+            keyWrapper.setIsDefaultClientCertificate(true);
         } else {
             PublicKey publicKey = KeycloakModelUtils.getPublicKey(encodedPublicKey);
             // Check if we have kid in DB, generate otherwise

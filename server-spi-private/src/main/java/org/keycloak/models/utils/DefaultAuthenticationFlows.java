@@ -17,6 +17,9 @@
 
 package org.keycloak.models.utils;
 
+import org.keycloak.Config;
+import org.keycloak.common.Profile;
+import org.keycloak.common.Profile.Feature;
 import org.keycloak.models.AuthenticationExecutionModel;
 import org.keycloak.models.AuthenticationFlowModel;
 import org.keycloak.models.AuthenticatorConfigModel;
@@ -24,7 +27,12 @@ import org.keycloak.models.RealmModel;
 import org.keycloak.models.RequiredCredentialModel;
 import org.keycloak.representations.idm.IdentityProviderRepresentation;
 
-import java.util.*;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Objects;
+import java.util.LinkedList;
+
 
 /**
  * @author <a href="mailto:bill@burkecentral.com">Bill Burke</a>
@@ -40,7 +48,6 @@ public class DefaultAuthenticationFlows {
     public static final String LOGIN_FORMS_FLOW = "forms";
     public static final String SAML_ECP_FLOW = "saml ecp";
     public static final String DOCKER_AUTH = "docker auth";
-    public static final String HTTP_CHALLENGE_FLOW = "http challenge";
 
     public static final String CLIENT_AUTHENTICATION_FLOW = "clients";
     public static final String FIRST_BROKER_LOGIN_FLOW = "first broker login";
@@ -52,30 +59,29 @@ public class DefaultAuthenticationFlows {
     public static void addFlows(RealmModel realm) {
         if (realm.getFlowByAlias(BROWSER_FLOW) == null) browserFlow(realm);
         if (realm.getFlowByAlias(DIRECT_GRANT_FLOW) == null) directGrantFlow(realm, false);
-        if (realm.getFlowByAlias(REGISTRATION_FLOW) == null) registrationFlow(realm);
+        if (realm.getFlowByAlias(REGISTRATION_FLOW) == null) registrationFlow(realm, false);
         if (realm.getFlowByAlias(RESET_CREDENTIALS_FLOW) == null) resetCredentialsFlow(realm);
         if (realm.getFlowByAlias(CLIENT_AUTHENTICATION_FLOW) == null) clientAuthFlow(realm);
         if (realm.getFlowByAlias(FIRST_BROKER_LOGIN_FLOW) == null) firstBrokerLoginFlow(realm, false);
         if (realm.getFlowByAlias(SAML_ECP_FLOW) == null) samlEcpProfile(realm);
         if (realm.getFlowByAlias(DOCKER_AUTH) == null) dockerAuthenticationFlow(realm);
-        if (realm.getFlowByAlias(HTTP_CHALLENGE_FLOW) == null) httpChallengeFlow(realm);
     }
+
     public static void migrateFlows(RealmModel realm) {
         if (realm.getFlowByAlias(BROWSER_FLOW) == null) browserFlow(realm, true);
         if (realm.getFlowByAlias(DIRECT_GRANT_FLOW) == null) directGrantFlow(realm, true);
-        if (realm.getFlowByAlias(REGISTRATION_FLOW) == null) registrationFlow(realm);
+        if (realm.getFlowByAlias(REGISTRATION_FLOW) == null) registrationFlow(realm, true);
         if (realm.getFlowByAlias(RESET_CREDENTIALS_FLOW) == null) resetCredentialsFlow(realm);
         if (realm.getFlowByAlias(CLIENT_AUTHENTICATION_FLOW) == null) clientAuthFlow(realm);
         if (realm.getFlowByAlias(FIRST_BROKER_LOGIN_FLOW) == null) firstBrokerLoginFlow(realm, true);
         if (realm.getFlowByAlias(SAML_ECP_FLOW) == null) samlEcpProfile(realm);
         if (realm.getFlowByAlias(DOCKER_AUTH) == null) dockerAuthenticationFlow(realm);
-        if (realm.getFlowByAlias(HTTP_CHALLENGE_FLOW) == null) httpChallengeFlow(realm);
     }
 
-    public static void registrationFlow(RealmModel realm) {
+    public static void registrationFlow(RealmModel realm, boolean migrate) {
         AuthenticationFlowModel registrationFlow = new AuthenticationFlowModel();
         registrationFlow.setAlias(REGISTRATION_FLOW);
-        registrationFlow.setDescription("registration flow");
+        registrationFlow.setDescription("Registration flow");
         registrationFlow.setProviderId("basic-flow");
         registrationFlow.setTopLevel(true);
         registrationFlow.setBuiltIn(true);
@@ -84,7 +90,7 @@ public class DefaultAuthenticationFlows {
 
         AuthenticationFlowModel registrationFormFlow = new AuthenticationFlowModel();
         registrationFormFlow.setAlias(REGISTRATION_FORM_FLOW);
-        registrationFormFlow.setDescription("registration form");
+        registrationFormFlow.setDescription("Registration form");
         registrationFormFlow.setProviderId("form-flow");
         registrationFormFlow.setTopLevel(false);
         registrationFormFlow.setBuiltIn(true);
@@ -112,14 +118,6 @@ public class DefaultAuthenticationFlows {
         execution = new AuthenticationExecutionModel();
         execution.setParentFlow(registrationFormFlow.getId());
         execution.setRequirement(AuthenticationExecutionModel.Requirement.REQUIRED);
-        execution.setAuthenticator("registration-profile-action");
-        execution.setPriority(40);
-        execution.setAuthenticatorFlow(false);
-        realm.addAuthenticatorExecution(execution);
-
-        execution = new AuthenticationExecutionModel();
-        execution.setParentFlow(registrationFormFlow.getId());
-        execution.setRequirement(AuthenticationExecutionModel.Requirement.REQUIRED);
         execution.setAuthenticator("registration-password-action");
         execution.setPriority(50);
         execution.setAuthenticatorFlow(false);
@@ -139,6 +137,14 @@ public class DefaultAuthenticationFlows {
         execution.setPriority(60);
         execution.setAuthenticatorFlow(false);
         //execution.setAuthenticatorConfig(captchaConfig.getId());
+        realm.addAuthenticatorExecution(execution);
+
+        execution = new AuthenticationExecutionModel();
+        execution.setParentFlow(registrationFormFlow.getId());
+        execution.setRequirement(AuthenticationExecutionModel.Requirement.DISABLED);
+        execution.setAuthenticator("registration-terms-and-conditions");
+        execution.setPriority(70);
+        execution.setAuthenticatorFlow(false);
         realm.addAuthenticatorExecution(execution);
     }
 
@@ -289,7 +295,7 @@ public class DefaultAuthenticationFlows {
     public static void browserFlow(RealmModel realm, boolean migrate) {
         AuthenticationFlowModel browser = new AuthenticationFlowModel();
         browser.setAlias(BROWSER_FLOW);
-        browser.setDescription("browser based authentication");
+        browser.setDescription("Browser based authentication");
         browser.setProviderId("basic-flow");
         browser.setTopLevel(true);
         browser.setBuiltIn(true);
@@ -376,6 +382,8 @@ public class DefaultAuthenticationFlows {
         execution.setPriority(20);
         execution.setAuthenticatorFlow(false);
         realm.addAuthenticatorExecution(execution);
+
+        addOrganizationBrowserFlowStep(realm, browser);
     }
 
     public static void addIdentityProviderAuthenticator(RealmModel realm, String defaultProvider) {
@@ -466,6 +474,7 @@ public class DefaultAuthenticationFlows {
         firstBrokerLogin.setTopLevel(true);
         firstBrokerLogin.setBuiltIn(true);
         firstBrokerLogin = realm.addAuthenticationFlow(firstBrokerLogin);
+        realm.setFirstBrokerLoginFlow(firstBrokerLogin);
 
         AuthenticatorConfigModel reviewProfileConfig = new AuthenticatorConfigModel();
         reviewProfileConfig.setAlias(IDP_REVIEW_PROFILE_CONFIG_ALIAS);
@@ -601,13 +610,15 @@ public class DefaultAuthenticationFlows {
             if (browserFlow == null) {
                 browserFlow = realm.getFlowByAlias(DefaultAuthenticationFlows.BROWSER_FLOW);
             }
-            List<AuthenticationExecutionModel> browserExecutions = new LinkedList<>();
-            KeycloakModelUtils.deepFindAuthenticationExecutions(realm, browserFlow, browserExecutions);
-            for (AuthenticationExecutionModel browserExecution : browserExecutions) {
-                if (browserExecution.isAuthenticatorFlow()){
-                    if (realm.getAuthenticationExecutionsStream(browserExecution.getFlowId())
-                            .anyMatch(e -> e.getAuthenticator().equals("auth-otp-form"))){
-                        execution.setRequirement(browserExecution.getRequirement());
+            if (browserFlow != null) {
+                List<AuthenticationExecutionModel> browserExecutions = new LinkedList<>();
+                KeycloakModelUtils.deepFindAuthenticationExecutions(realm, browserFlow, browserExecutions);
+                for (AuthenticationExecutionModel browserExecution : browserExecutions) {
+                    if (browserExecution.isAuthenticatorFlow()){
+                        if (realm.getAuthenticationExecutionsStream(browserExecution.getFlowId())
+                                .anyMatch(e -> e.getAuthenticator().equals("auth-otp-form"))){
+                            execution.setRequirement(browserExecution.getRequirement());
+                        }
                     }
                 }
             }
@@ -632,6 +643,8 @@ public class DefaultAuthenticationFlows {
         execution.setPriority(20);
         execution.setAuthenticatorFlow(false);
         realm.addAuthenticatorExecution(execution);
+
+        addOrganizationFirstBrokerFlowStep(realm, firstBrokerLogin);
     }
 
     public static void samlEcpProfile(RealmModel realm) {
@@ -677,60 +690,95 @@ public class DefaultAuthenticationFlows {
         realm.addAuthenticatorExecution(execution);
     }
 
-    public static void httpChallengeFlow(RealmModel realm) {
-        AuthenticationFlowModel challengeFlow = new AuthenticationFlowModel();
-        challengeFlow.setAlias(HTTP_CHALLENGE_FLOW);
-        challengeFlow.setDescription("An authentication flow based on challenge-response HTTP Authentication Schemes");
-        challengeFlow.setProviderId("basic-flow");
-        challengeFlow.setTopLevel(true);
-        challengeFlow.setBuiltIn(true);
-        challengeFlow = realm.addAuthenticationFlow(challengeFlow);
+    private static void addOrganizationFirstBrokerFlowStep(RealmModel realm, AuthenticationFlowModel flow) {
+        if (!Profile.isFeatureEnabled(Feature.ORGANIZATION)) {
+            return;
+        }
+        if (!Config.getAdminRealm().equals(realm.getName())) {
+            // do not add the org flows to the master realm for now.
+            AuthenticationFlowModel conditionalOrg = new AuthenticationFlowModel();
+            conditionalOrg.setTopLevel(false);
+            conditionalOrg.setBuiltIn(true);
+            conditionalOrg.setAlias("First Broker Login - Conditional Organization");
+            conditionalOrg.setDescription("Flow to determine if the authenticator that adds organization members is to be used");
+            conditionalOrg.setProviderId("basic-flow");
+            conditionalOrg = realm.addAuthenticationFlow(conditionalOrg);
+            AuthenticationExecutionModel execution = new AuthenticationExecutionModel();
+            execution.setParentFlow(flow.getId());
+            execution.setRequirement(AuthenticationExecutionModel.Requirement.CONDITIONAL);
+            execution.setFlowId(conditionalOrg.getId());
+            execution.setPriority(50);
+            execution.setAuthenticatorFlow(true);
+            realm.addAuthenticatorExecution(execution);
 
-        AuthenticationExecutionModel execution = new AuthenticationExecutionModel();
-        execution.setParentFlow(challengeFlow.getId());
-        execution.setRequirement(AuthenticationExecutionModel.Requirement.REQUIRED);
-        execution.setAuthenticator("no-cookie-redirect");
-        execution.setPriority(10);
-        execution.setAuthenticatorFlow(false);
-        realm.addAuthenticatorExecution(execution);
+            execution = new AuthenticationExecutionModel();
+            execution.setParentFlow(conditionalOrg.getId());
+            execution.setRequirement(AuthenticationExecutionModel.Requirement.REQUIRED);
+            execution.setAuthenticator("conditional-user-configured");
+            execution.setPriority(10);
+            execution.setAuthenticatorFlow(false);
+            realm.addAuthenticatorExecution(execution);
 
-        AuthenticationFlowModel authType = new AuthenticationFlowModel();
-        authType.setTopLevel(false);
-        authType.setBuiltIn(true);
-        authType.setAlias("Authentication Options");
-        authType.setDescription("Authentication options.");
-        authType.setProviderId("basic-flow");
-        authType = realm.addAuthenticationFlow(authType);
-        execution = new AuthenticationExecutionModel();
-        execution.setParentFlow(challengeFlow.getId());
-        execution.setRequirement(AuthenticationExecutionModel.Requirement.REQUIRED);
-        execution.setFlowId(authType.getId());
-        execution.setPriority(20);
-        execution.setAuthenticatorFlow(true);
-        realm.addAuthenticatorExecution(execution);
+            execution = new AuthenticationExecutionModel();
+            execution.setParentFlow(conditionalOrg.getId());
+            execution.setRequirement(AuthenticationExecutionModel.Requirement.REQUIRED);
+            execution.setAuthenticator("idp-add-organization-member");
+            execution.setPriority(20);
+            execution.setAuthenticatorFlow(false);
+            realm.addAuthenticatorExecution(execution);
+        }
+    }
 
-        execution = new AuthenticationExecutionModel();
-        execution.setParentFlow(authType.getId());
-        execution.setRequirement(AuthenticationExecutionModel.Requirement.REQUIRED);
-        execution.setAuthenticator("basic-auth");
-        execution.setPriority(10);
-        execution.setAuthenticatorFlow(false);
-        realm.addAuthenticatorExecution(execution);
+    public static void addOrganizationBrowserFlowStep(RealmModel realm, AuthenticationFlowModel flow) {
+        if (!Profile.isFeatureEnabled(Feature.ORGANIZATION)) {
+            return;
+        }
+        if (!Config.getAdminRealm().equals(realm.getName())) {
+            // do not add the org flows to the master realm for now.
+            AuthenticationFlowModel organizations = new AuthenticationFlowModel();
+            organizations.setTopLevel(false);
+            organizations.setBuiltIn(true);
+            organizations.setAlias("Organization");
+            organizations.setProviderId("basic-flow");
+            organizations = realm.addAuthenticationFlow(organizations);
+            AuthenticationExecutionModel execution = new AuthenticationExecutionModel();
+            execution.setParentFlow(flow.getId());
+            execution.setRequirement(AuthenticationExecutionModel.Requirement.ALTERNATIVE);
+            execution.setFlowId(organizations.getId());
+            execution.setPriority(26);
+            execution.setAuthenticatorFlow(true);
+            realm.addAuthenticatorExecution(execution);
 
-        execution = new AuthenticationExecutionModel();
-        execution.setParentFlow(authType.getId());
-        execution.setRequirement(AuthenticationExecutionModel.Requirement.DISABLED);
-        execution.setAuthenticator("basic-auth-otp");
-        execution.setPriority(20);
-        execution.setAuthenticatorFlow(false);
-        realm.addAuthenticatorExecution(execution);
+            AuthenticationFlowModel conditionalOrg = new AuthenticationFlowModel();
+            conditionalOrg.setTopLevel(false);
+            conditionalOrg.setBuiltIn(true);
+            conditionalOrg.setAlias("Browser - Conditional Organization");
+            conditionalOrg.setDescription("Flow to determine if the organization identity-first login is to be used");
+            conditionalOrg.setProviderId("basic-flow");
+            conditionalOrg = realm.addAuthenticationFlow(conditionalOrg);
+            execution = new AuthenticationExecutionModel();
+            execution.setParentFlow(organizations.getId());
+            execution.setRequirement(AuthenticationExecutionModel.Requirement.CONDITIONAL);
+            execution.setFlowId(conditionalOrg.getId());
+            execution.setPriority(10);
+            execution.setAuthenticatorFlow(true);
+            realm.addAuthenticatorExecution(execution);
 
-        execution = new AuthenticationExecutionModel();
-        execution.setParentFlow(authType.getId());
-        execution.setRequirement(AuthenticationExecutionModel.Requirement.DISABLED);
-        execution.setAuthenticator("auth-spnego");
-        execution.setPriority(30);
-        execution.setAuthenticatorFlow(false);
-        realm.addAuthenticatorExecution(execution);
+            execution = new AuthenticationExecutionModel();
+            execution.setParentFlow(conditionalOrg.getId());
+            execution.setRequirement(AuthenticationExecutionModel.Requirement.REQUIRED);
+            execution.setAuthenticator("conditional-user-configured");
+            execution.setPriority(10);
+            execution.setAuthenticatorFlow(false);
+            realm.addAuthenticatorExecution(execution);
+
+            execution = new AuthenticationExecutionModel();
+            execution.setParentFlow(conditionalOrg.getId());
+            execution.setRequirement(AuthenticationExecutionModel.Requirement.ALTERNATIVE);
+            execution.setAuthenticator("organization");
+            execution.setPriority(20);
+            execution.setAuthenticatorFlow(false);
+            realm.addAuthenticatorExecution(execution);
+        }
     }
 }

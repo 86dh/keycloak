@@ -151,6 +151,11 @@ public class UserAttributeLDAPStorageMapper extends AbstractLDAPStorageMapper {
         return isMandatoryInLdap? Collections.singleton(getLdapAttributeName()) : null;
     }
 
+    @Override
+    public Set<String> getUserAttributes() {
+        return Collections.singleton(getUserModelAttribute());
+    }
+
     // throw ModelDuplicateException if there is different user in model with same email
     protected void checkDuplicateEmail(String userModelAttrName, String email, RealmModel realm, KeycloakSession session, UserModel user) {
         if (email == null || realm.isDuplicateEmailsAllowed()) return;
@@ -182,6 +187,9 @@ public class UserAttributeLDAPStorageMapper extends AbstractLDAPStorageMapper {
                             UserModel.USERNAME);
                 }
             } else if (usernameChanged) {
+                if (realm.isRegistrationEmailAsUsername() && username.equals(user.getEmail())) {
+                    return;
+                }
                 throw new ModelException("Cannot change username if the realm is not configured to allow edit the usernames");
             }
         }
@@ -383,14 +391,11 @@ public class UserAttributeLDAPStorageMapper extends AbstractLDAPStorageMapper {
                 public Map<String, List<String>> getAttributes() {
                     Map<String, List<String>> attrs = new HashMap<>(super.getAttributes());
 
-                    // Ignore UserModel properties
-                    if (userModelProperties.get(userModelAttrName.toLowerCase()) != null) {
-                        return attrs;
-                    }
-
                     Set<String> allLdapAttrValues = ldapUser.getAttributeAsSet(ldapAttrName);
                     if (allLdapAttrValues != null) {
                         attrs.put(userModelAttrName, new ArrayList<>(allLdapAttrValues));
+                    } else {
+                        attrs.remove(userModelAttrName);
                     }
                     return attrs;
                 }

@@ -35,8 +35,8 @@ import org.keycloak.testsuite.util.AdminEventPaths;
 import org.keycloak.testsuite.util.ClientBuilder;
 import org.keycloak.testsuite.util.RoleBuilder;
 
-import javax.ws.rs.NotFoundException;
-import javax.ws.rs.core.Response;
+import jakarta.ws.rs.NotFoundException;
+import jakarta.ws.rs.core.Response;
 
 import java.util.Arrays;
 import java.util.Collection;
@@ -47,8 +47,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
-import javax.ws.rs.BadRequestException;
-import javax.ws.rs.ClientErrorException;
+import jakarta.ws.rs.BadRequestException;
+import jakarta.ws.rs.ClientErrorException;
 
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.Matchers.allOf;
@@ -352,12 +352,14 @@ public class RealmRolesTest extends AbstractAdminTest {
 
         List<UserRepresentation> roleUserMembers = roleResource.getUserMembers(0, 1);
         assertEquals(Collections.singletonList("test-role-member"), extractUsernames(roleUserMembers));
+        Assert.assertNotNull("Not in full representation", roleUserMembers.get(0).getNotBefore());
 
-        roleUserMembers = roleResource.getUserMembers(1, 1);
+        roleUserMembers = roleResource.getUserMembers(true, 1, 1);
         assertThat(roleUserMembers, hasSize(1));
         assertEquals(Collections.singletonList("test-role-member2"), extractUsernames(roleUserMembers));
+        Assert.assertNull("Not in brief representation", roleUserMembers.get(0).getNotBefore());
 
-        roleUserMembers = roleResource.getUserMembers(2, 1);
+        roleUserMembers = roleResource.getUserMembers(true, 2, 1);
         assertThat(roleUserMembers, is(empty()));
     }
 

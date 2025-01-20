@@ -57,6 +57,7 @@ import org.keycloak.representations.idm.RoleRepresentation;
 import org.keycloak.testsuite.client.resources.TestApplicationResourceUrls;
 import org.keycloak.testsuite.client.resources.TestOIDCEndpointsApplicationResource;
 import org.keycloak.testsuite.pages.LoginPage;
+import org.keycloak.testsuite.util.KeyUtils;
 import org.keycloak.testsuite.util.KeycloakModelUtils;
 import org.keycloak.protocol.oidc.OIDCAdvancedConfigWrapper;
 import org.keycloak.protocol.oidc.OIDCLoginProtocolService;
@@ -74,6 +75,7 @@ import org.keycloak.testsuite.util.AdminClientUtil;
 import org.keycloak.testsuite.util.ClientManager;
 import org.keycloak.testsuite.util.OAuthClient;
 import org.keycloak.testsuite.util.RealmBuilder;
+import org.keycloak.testsuite.util.RoleBuilder;
 import org.keycloak.testsuite.util.TokenSignatureUtil;
 import org.keycloak.testsuite.util.UserInfoClientUtil;
 import org.keycloak.testsuite.util.WaitUtils;
@@ -82,16 +84,17 @@ import org.keycloak.util.JsonSerialization;
 import org.keycloak.util.TokenUtil;
 import org.keycloak.utils.MediaType;
 
-import javax.ws.rs.client.Client;
-import javax.ws.rs.client.Entity;
-import javax.ws.rs.client.WebTarget;
-import javax.ws.rs.core.Form;
-import javax.ws.rs.core.HttpHeaders;
-import javax.ws.rs.core.Response;
-import javax.ws.rs.core.Response.Status;
-import javax.ws.rs.core.UriBuilder;
+import jakarta.ws.rs.client.Client;
+import jakarta.ws.rs.client.Entity;
+import jakarta.ws.rs.client.WebTarget;
+import jakarta.ws.rs.core.Form;
+import jakarta.ws.rs.core.HttpHeaders;
+import jakarta.ws.rs.core.Response;
+import jakarta.ws.rs.core.Response.Status;
+import jakarta.ws.rs.core.UriBuilder;
 import java.io.IOException;
 import java.net.URI;
+import java.nio.charset.StandardCharsets;
 import java.security.PrivateKey;
 import java.security.PublicKey;
 import java.util.Collection;
@@ -102,11 +105,10 @@ import java.util.Map;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
-import static org.junit.Assert.assertThat;
+import static org.hamcrest.MatcherAssert.assertThat;
 import static org.keycloak.protocol.oidc.mappers.OIDCAttributeMapperHelper.INCLUDE_IN_USERINFO;
 import static org.keycloak.testsuite.admin.AbstractAdminTest.loadJson;
 import static org.keycloak.testsuite.util.OAuthClient.AUTH_SERVER_ROOT;
-import org.keycloak.testsuite.util.RoleBuilder;
 
 /**
  * @author pedroigor
@@ -142,13 +144,12 @@ public class UserInfoTest extends AbstractKeycloakTest {
         samlApp.setDirectAccessGrantsEnabled(true);
     }
 
-    @Test
-    public void testSuccess_getMethod_header() throws Exception {
+    public void testSuccessGet(String acceptHeader) throws Exception {
         Client client = AdminClientUtil.createResteasyClient();
 
         try {
             AccessTokenResponse accessTokenResponse = executeGrantAccessTokenRequest(client);
-            Response response = UserInfoClientUtil.executeUserInfoRequest_getMethod(client, accessTokenResponse.getToken());
+            Response response = UserInfoClientUtil.executeUserInfoRequest_getMethod(client, accessTokenResponse.getToken(), acceptHeader);
 
             UserInfo userInfo = testSuccessfulUserInfoResponse(response);
             testRolesAreNotInUserInfoResponse(userInfo);
@@ -156,6 +157,16 @@ public class UserInfoTest extends AbstractKeycloakTest {
         } finally {
             client.close();
         }
+    }
+
+    @Test
+    public void testSuccess_getMethod_header() throws Exception {
+        testSuccessGet(null);
+    }
+
+    @Test
+    public void testSuccess_getMethod_header_accept_json() throws Exception {
+        testSuccessGet(MediaType.APPLICATION_JSON);
     }
 
     @Test
@@ -198,13 +209,36 @@ public class UserInfoTest extends AbstractKeycloakTest {
         }
     }
 
+    @Test
+    public void testSuccess_postMethod_charset_body() throws Exception {
+        Client client = AdminClientUtil.createResteasyClient();
+
+        try {
+            AccessTokenResponse accessTokenResponse = executeGrantAccessTokenRequest(client);
+
+            Form form = new Form();
+            form.param("access_token", accessTokenResponse.getToken());
+
+            WebTarget userInfoTarget = UserInfoClientUtil.getUserInfoWebTarget(client);
+            Response response = userInfoTarget.request()
+                    .header(HttpHeaders.CONTENT_TYPE, MediaType.APPLICATION_FORM_URLENCODED_TYPE.withCharset("utf-8"))
+                    .post(Entity.form(form));
+
+            testSuccessfulUserInfoResponse(response);
+
+        } finally {
+            client.close();
+        }
+    }
+
 
     // KEYCLOAK-8838
     @Test
     public void testSuccess_dotsInClientId() throws Exception {
         // Create client with dot in the name
+        final String clientId = "my.foo.$\\client\\$";
         ClientRepresentation clientRep = org.keycloak.testsuite.util.ClientBuilder.create()
-                .clientId("my.foo.client")
+                .clientId(clientId)
                 .addRedirectUri("http://foo.host")
                 .secret("password")
                 .directAccessGrants()
@@ -226,11 +260,11 @@ public class UserInfoTest extends AbstractKeycloakTest {
         userResource.roles().clientLevel(clientUUID).add(Collections.singletonList(fooRole));
 
         // Login to the new client
-        OAuthClient.AccessTokenResponse accessTokenResponse = oauth.clientId("my.foo.client")
+        OAuthClient.AccessTokenResponse accessTokenResponse = oauth.clientId(clientId)
                 .doGrantAccessTokenRequest("password", "test-user@localhost", "password");
 
         AccessToken accessToken = oauth.verifyToken(accessTokenResponse.getAccessToken());
-        Assert.assertNames(accessToken.getResourceAccess("my.foo.client").getRoles(), "my.foo.role");
+        Assert.assertNames(accessToken.getResourceAccess(clientId).getRoles(), "my.foo.role");
 
         events.clear();
 
@@ -239,7 +273,7 @@ public class UserInfoTest extends AbstractKeycloakTest {
         try {
             Response response = UserInfoClientUtil.executeUserInfoRequest_getMethod(client, accessTokenResponse.getAccessToken());
 
-            testSuccessfulUserInfoResponse(response, "my.foo.client");
+            testSuccessfulUserInfoResponse(response, clientId);
         } finally {
             client.close();
         }
@@ -294,13 +328,27 @@ public class UserInfoTest extends AbstractKeycloakTest {
         testUserInfoSignatureAndEncryption(null, JWEConstants.RSA1_5, null);
     }
 
+    @Test
+    public void testSuccessEncryptedResponseSigAlgEd25519AlgRSA_OAEPEncA256GCM() throws Exception {
+        testUserInfoSignatureAndEncryption(Algorithm.EdDSA, Algorithm.Ed25519, JWEConstants.RSA_OAEP, JWEConstants.A256GCM);
+    }
+
+    @Test
+    public void testSuccessEncryptedResponseSigAlgEd448AlgRSA_OAEP256EncA256CBC_HS512() throws Exception {
+        testUserInfoSignatureAndEncryption(Algorithm.EdDSA, Algorithm.Ed448, JWEConstants.RSA_OAEP_256, JWEConstants.A256CBC_HS512);
+    }
+
     private void testUserInfoSignatureAndEncryption(String sigAlgorithm, String algAlgorithm, String encAlgorithm) {
+        testUserInfoSignatureAndEncryption(sigAlgorithm, null, algAlgorithm, encAlgorithm);
+    }
+
+    private void testUserInfoSignatureAndEncryption(String sigAlgorithm, String curve, String algAlgorithm, String encAlgorithm) {
         ClientResource clientResource = null;
         ClientRepresentation clientRep = null;
         try {
             // generate and register encryption key onto client
             TestOIDCEndpointsApplicationResource oidcClientEndpointsResource = testingClient.testApp().oidcClientEndpoints();
-            oidcClientEndpointsResource.generateKeys(algAlgorithm);
+            oidcClientEndpointsResource.generateKeys(algAlgorithm, curve);
 
             clientResource = ApiUtil.findClientByClientId(adminClient.realm("test"), "test-app");
             clientRep = clientResource.toRepresentation();
@@ -354,7 +402,7 @@ public class UserInfoTest extends AbstractKeycloakTest {
             JWEEncryptionProvider encryptionProvider = encAlgorithm != null ? getJweEncryptionProvider(encAlgorithm) :
                     getJweEncryptionProvider(JWEConstants.A128CBC_HS256);
             byte[] decodedString = TokenUtil.jweKeyEncryptionVerifyAndDecode(decryptionKEK, encryptedResponse, algorithmProvider, encryptionProvider);
-            String jwePayload = new String(decodedString, "UTF-8");
+            String jwePayload = new String(decodedString, StandardCharsets.UTF_8);
 
             UserInfo userInfo = null;
             // verify JWS
@@ -440,7 +488,7 @@ public class UserInfoTest extends AbstractKeycloakTest {
                     .assertEvent();
 
             // Check signature and content
-            PublicKey publicKey = PemUtils.decodePublicKey(ApiUtil.findActiveSigningKey(adminClient.realm("test")).getPublicKey());
+            PublicKey publicKey = PemUtils.decodePublicKey(KeyUtils.findActiveSigningKey(adminClient.realm("test")).getPublicKey());
 
             Assert.assertEquals(200, response.getStatus());
             Assert.assertEquals(response.getHeaderString(HttpHeaders.CONTENT_TYPE), MediaType.APPLICATION_JWT);
@@ -472,14 +520,19 @@ public class UserInfoTest extends AbstractKeycloakTest {
 
     @Test
     public void testSuccessSignedResponseES256() throws Exception {
-        testSuccessSignedResponse(Algorithm.ES256);
+        testSuccessSignedResponse(Algorithm.ES256, null);
     }
 
     @Test
     public void testSuccessSignedResponsePS256() throws Exception {
-        testSuccessSignedResponse(Algorithm.PS256);
+        testSuccessSignedResponse(Algorithm.PS256, null);
     }
- 
+
+    @Test
+    public void testSuccessSignedResponseRS256AcceptJWT() throws Exception {
+        testSuccessSignedResponse(Algorithm.RS256, MediaType.APPLICATION_JWT);
+    }
+
     @Test
     public void testSessionExpired() {
         Client client = AdminClientUtil.createResteasyClient();
@@ -555,8 +608,8 @@ public class UserInfoTest extends AbstractKeycloakTest {
 
         setTimeOffset(2);
 
-        WaitUtils.waitForPageToLoad();
-        loginPage.login("password");
+        driver.navigate().refresh();
+        oauth.fillLoginForm("test-user@localhost", "password");
         events.expectLogin().assertEvent();
 
         Assert.assertFalse(loginPage.isCurrent());
@@ -578,7 +631,7 @@ public class UserInfoTest extends AbstractKeycloakTest {
             response.close();
 
             events.expect(EventType.USER_INFO_REQUEST_ERROR)
-                    .error(Errors.INVALID_TOKEN)
+                    .error(Errors.USER_SESSION_NOT_FOUND)
                     .user(Matchers.nullValue(String.class))
                     .session(Matchers.nullValue(String.class))
                     .detail(Details.AUTH_METHOD, Details.VALIDATE_ACCESS_TOKEN)
@@ -655,7 +708,7 @@ public class UserInfoTest extends AbstractKeycloakTest {
         try {
             AccessTokenResponse accessTokenResponse = executeGrantAccessTokenRequest(client, true, true);
 
-            testingClient.testing().removeUserSessions("test");
+            testingClient.testing().removeExpired("test");
 
             Response response = UserInfoClientUtil.executeUserInfoRequest_getMethod(client, accessTokenResponse.getToken());
 
@@ -919,7 +972,7 @@ public class UserInfoTest extends AbstractKeycloakTest {
         return UserInfoClientUtil.testSuccessfulUserInfoResponse(response, "test-user@localhost", "test-user@localhost");
     }
 
-    private void testSuccessSignedResponse(String sigAlg) throws Exception {
+    private void testSuccessSignedResponse(String sigAlg, String acceptHeader) throws Exception {
 
         try {
             // Require signed userInfo request
@@ -934,7 +987,7 @@ public class UserInfoTest extends AbstractKeycloakTest {
             try {
                 AccessTokenResponse accessTokenResponse = executeGrantAccessTokenRequest(client);
 
-                Response response = UserInfoClientUtil.executeUserInfoRequest_getMethod(client, accessTokenResponse.getToken());
+                Response response = UserInfoClientUtil.executeUserInfoRequest_getMethod(client, accessTokenResponse.getToken(), acceptHeader);
 
                 events.expect(EventType.USER_INFO_REQUEST)
                         .session(Matchers.notNullValue(String.class))
@@ -1036,23 +1089,23 @@ public class UserInfoTest extends AbstractKeycloakTest {
         assertNull(userInfo.getOtherClaims().get("realm_access"));
         assertNull(userInfo.getOtherClaims().get("resource_access"));
     }
-    
+
     @Test
     public void test_noContentType() throws Exception {
         Client client = AdminClientUtil.createResteasyClient();
 
         try {
             AccessTokenResponse accessTokenResponse = executeGrantAccessTokenRequest(client);
-                    
+
             WebTarget userInfoTarget = UserInfoClientUtil.getUserInfoWebTarget(client);
             Response response = userInfoTarget.request()
                     .header(HttpHeaders.AUTHORIZATION, "bearer " + accessTokenResponse.getToken())
                     .build("POST")
                     .invoke();
-            
+
             Assert.assertEquals(200, response.getStatus());
             Assert.assertEquals("OK", response.getStatusInfo().toString());
-           	
+
         } finally {
             client.close();
         }

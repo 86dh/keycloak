@@ -17,9 +17,13 @@
 
 package org.keycloak.testsuite.admin;
 
-import org.keycloak.admin.client.resource.ComponentResource;
+import org.apache.commons.lang3.RandomStringUtils;
+import org.apache.commons.lang3.StringUtils;
+import org.apache.commons.lang3.concurrent.BasicThreadFactory;
+import org.hamcrest.Matchers;
 import org.junit.Before;
 import org.junit.Test;
+import org.keycloak.admin.client.resource.ComponentResource;
 import org.keycloak.admin.client.resource.ComponentsResource;
 import org.keycloak.admin.client.resource.RealmResource;
 import org.keycloak.common.util.MultivaluedHashMap;
@@ -27,21 +31,27 @@ import org.keycloak.models.utils.KeycloakModelUtils;
 import org.keycloak.representations.idm.*;
 import org.keycloak.testsuite.components.TestProvider;
 
-import javax.ws.rs.WebApplicationException;
-import javax.ws.rs.core.Response;
+import jakarta.ws.rs.WebApplicationException;
+import jakarta.ws.rs.core.Response;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
-import org.apache.commons.lang3.StringUtils;
-
-import java.util.concurrent.*;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 import java.util.function.BiConsumer;
-import org.apache.commons.lang3.concurrent.BasicThreadFactory;
-import org.hamcrest.Matchers;
+
+import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.Matchers.contains;
-import static org.junit.Assert.*;
 import static org.hamcrest.Matchers.containsString;
+import static org.hamcrest.Matchers.equalTo;
 import static org.hamcrest.Matchers.not;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.fail;
 
 /**
  * @author <a href="mailto:sthorger@redhat.com">Stian Thorgersen</a>
@@ -83,7 +93,7 @@ public class ComponentsTest extends AbstractAdminTest {
     public void testConcurrencyWithoutChildren() throws InterruptedException {
         testConcurrency((s, i) -> s.submit(new CreateAndDeleteComponent(s, i)));
 
-//        Data consistency is not guaranteed with concurrent access to entities in map store. 
+//        Data consistency is not guaranteed with concurrent access to entities in map store.
 //        For details see https://issues.redhat.com/browse/KEYCLOAK-17586
 //        The reason that this test remains here is to test whether it finishes in time (we need to test whether there is no slowness).
 //        assertThat(realm.components().query(realm.toRepresentation().getId(), TestProvider.class.getName()), Matchers.hasSize(0));
@@ -93,7 +103,7 @@ public class ComponentsTest extends AbstractAdminTest {
     public void testConcurrencyWithChildren() throws InterruptedException {
         testConcurrency((s, i) -> s.submit(new CreateAndDeleteComponentWithFlatChildren(s, i)));
 
-//        Data consistency is not guaranteed with concurrent access to entities in map store. 
+//        Data consistency is not guaranteed with concurrent access to entities in map store.
 //        For details see https://issues.redhat.com/browse/KEYCLOAK-17586
 //        The reason that this test remains here is to test whether it finishes in time (we need to test whether there is no slowness).
 //        assertThat(realm.components().query(realm.toRepresentation().getId(), TestProvider.class.getName()), Matchers.hasSize(0));
@@ -219,6 +229,9 @@ public class ComponentsTest extends AbstractAdminTest {
         // Check value updated
         returned.getConfig().putSingle("val1", "one-updated");
 
+        // send a key / value which not contained in the original component config
+        returned.getConfig().putSingle("not-a-config-key", "ten");
+
         // Check null deletes property
         returned.getConfig().putSingle("val2", null);
 
@@ -324,6 +337,23 @@ public class ComponentsTest extends AbstractAdminTest {
     }
 
     @Test
+    public void testCreateLongValue() {
+        ComponentRepresentation rep = createComponentRepresentation("mycomponent");
+
+        final String randomLongString = RandomStringUtils.random(5000, true, true);
+
+        rep.getConfig().putSingle("required", "Required");
+        rep.getConfig().putSingle("val1", randomLongString);
+
+        String id = createComponent(rep);
+        ComponentRepresentation returned = components.component(id).toRepresentation();
+
+        assertThat(returned.getConfig().size(), equalTo(2));
+        assertNotNull(returned.getConfig().getFirst("val1"));
+        assertThat(returned.getConfig().getFirst("val1"), equalTo(randomLongString));
+    }
+
+    @Test
     public void testLongValueInComponentConfigAscii() throws Exception {
         ComponentRepresentation rep = createComponentRepresentation("mycomponent");
         String value = StringUtils.repeat("0123456789", 400);  // 4000 8-bit characters
@@ -415,7 +445,7 @@ public class ComponentsTest extends AbstractAdminTest {
             ComponentRepresentation rep = createComponentRepresentation("test-" + i);
             rep.getConfig().putSingle("required", "required-value");
             rep.setParentId(this.realm.toRepresentation().getId());
-            
+
             String id = createComponent(this.realm, rep);
             assertThat(id, Matchers.notNullValue());
 

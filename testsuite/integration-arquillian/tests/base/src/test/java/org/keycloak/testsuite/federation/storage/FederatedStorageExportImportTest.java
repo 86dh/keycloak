@@ -39,7 +39,8 @@ import org.keycloak.services.managers.RealmManager;
 import org.keycloak.storage.UserStorageUtil;
 import org.keycloak.testsuite.AbstractAuthTest;
 
-import javax.ws.rs.NotFoundException;
+import java.io.Closeable;
+import jakarta.ws.rs.NotFoundException;
 import java.io.File;
 import java.util.LinkedList;
 import java.util.List;
@@ -58,8 +59,6 @@ public class FederatedStorageExportImportTest extends AbstractAuthTest {
 
     @Before
     public void setDirs() {
-        Assume.assumeTrue("RealmProvider is not 'jpa'", isJpaRealmProvider());
-
         File baseDir = new File(System.getProperty("auth.server.config.dir", "target"));
 
         exportFileAbsolutePath = new File (baseDir, "singleFile-full.json").getAbsolutePath();
@@ -85,11 +84,11 @@ public class FederatedStorageExportImportTest extends AbstractAuthTest {
     }
 
     public static PasswordHashProvider getHashProvider(KeycloakSession session, PasswordPolicy policy) {
-        PasswordHashProvider hash = session.getProvider(PasswordHashProvider.class, policy.getHashAlgorithm());
-        if (hash == null) {
-            return session.getProvider(PasswordHashProvider.class, PasswordPolicy.HASH_ALGORITHM_DEFAULT);
+        if (policy != null && policy.getHashAlgorithm() != null) {
+            return session.getProvider(PasswordHashProvider.class, policy.getHashAlgorithm());
+        } else {
+            return session.getProvider(PasswordHashProvider.class);
         }
-        return hash;
     }
 
 
@@ -125,15 +124,17 @@ public class FederatedStorageExportImportTest extends AbstractAuthTest {
             ExportImportConfig.setProvider(SingleFileExportProviderFactory.PROVIDER_ID);
             ExportImportConfig.setFile(exportFileAbsolutePath);
             ExportImportConfig.setRealmName(REALM_NAME);
-            ExportImportConfig.setAction(ExportImportConfig.ACTION_EXPORT);
-            new ExportImportManager(session).runExport();
+            try (Closeable c = ExportImportConfig.setAction(ExportImportConfig.ACTION_EXPORT)) {
+                new ExportImportManager(session).runExport();
+            }
             session.realms().removeRealm(realmId);
         });
 
         testingClient.server().run(session -> {
             Assert.assertNull(session.realms().getRealmByName(REALM_NAME));
-            ExportImportConfig.setAction(ExportImportConfig.ACTION_IMPORT);
-            new ExportImportManager(session).runImport();
+            try (Closeable c = ExportImportConfig.setAction(ExportImportConfig.ACTION_IMPORT)) {
+                new ExportImportManager(session).runImport();
+            }
         });
 
         testingClient.server().run(session -> {
@@ -193,16 +194,18 @@ public class FederatedStorageExportImportTest extends AbstractAuthTest {
             ExportImportConfig.setProvider(DirExportProviderFactory.PROVIDER_ID);
             ExportImportConfig.setDir(exportDirAbsolutePath);
             ExportImportConfig.setRealmName(REALM_NAME);
-            ExportImportConfig.setAction(ExportImportConfig.ACTION_EXPORT);
-            new ExportImportManager(session).runExport();
+            try (Closeable c = ExportImportConfig.setAction(ExportImportConfig.ACTION_EXPORT)) {
+                new ExportImportManager(session).runExport();
+            }
             session.realms().removeRealm(realmId);
         });
 
 
         testingClient.server().run(session -> {
             Assert.assertNull(session.realms().getRealmByName(REALM_NAME));
-            ExportImportConfig.setAction(ExportImportConfig.ACTION_IMPORT);
-            new ExportImportManager(session).runImport();
+            try (Closeable c = ExportImportConfig.setAction(ExportImportConfig.ACTION_IMPORT)) {
+                new ExportImportManager(session).runImport();
+            }
         });
 
         testingClient.server().run(session -> {

@@ -16,7 +16,7 @@
  */
 package org.keycloak.services.managers;
 
-import javax.ws.rs.NotAuthorizedException;
+import jakarta.ws.rs.NotAuthorizedException;
 
 import org.keycloak.common.ClientConnection;
 import org.keycloak.common.util.ObjectUtil;
@@ -24,8 +24,10 @@ import org.keycloak.models.KeycloakContext;
 import org.keycloak.models.KeycloakSession;
 import org.keycloak.models.RealmModel;
 
-import javax.ws.rs.core.HttpHeaders;
-import javax.ws.rs.core.UriInfo;
+import jakarta.ws.rs.core.HttpHeaders;
+import jakarta.ws.rs.core.UriInfo;
+import org.keycloak.util.TokenUtil;
+
 import java.util.regex.Pattern;
 
 /**
@@ -65,7 +67,7 @@ public class AppAuthManager extends AuthenticationManager {
         }
 
         String bearerPart = split[0];
-        if (!bearerPart.equalsIgnoreCase(BEARER)){
+        if (!bearerPart.equalsIgnoreCase(BEARER) && !bearerPart.equalsIgnoreCase(TokenUtil.TOKEN_TYPE_DPOP)){
             return null;
         }
 

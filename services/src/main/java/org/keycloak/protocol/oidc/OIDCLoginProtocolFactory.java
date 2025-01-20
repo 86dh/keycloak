@@ -21,6 +21,7 @@ import org.keycloak.Config;
 import org.keycloak.OAuth2Constants;
 import org.keycloak.common.Profile;
 import org.keycloak.common.constants.KerberosConstants;
+import org.keycloak.common.constants.ServiceAccountConstants;
 import org.keycloak.common.util.UriUtils;
 import org.keycloak.events.EventBuilder;
 import org.keycloak.models.ClientModel;
@@ -39,14 +40,17 @@ import org.keycloak.protocol.oidc.mappers.AddressMapper;
 import org.keycloak.protocol.oidc.mappers.AllowedWebOriginsProtocolMapper;
 import org.keycloak.protocol.oidc.mappers.AudienceResolveProtocolMapper;
 import org.keycloak.protocol.oidc.mappers.FullNameMapper;
+import org.keycloak.organization.protocol.mappers.oidc.OrganizationMembershipMapper;
 import org.keycloak.protocol.oidc.mappers.UserAttributeMapper;
 import org.keycloak.protocol.oidc.mappers.UserClientRoleMappingMapper;
 import org.keycloak.protocol.oidc.mappers.UserPropertyMapper;
 import org.keycloak.protocol.oidc.mappers.UserRealmRoleMappingMapper;
 import org.keycloak.protocol.oidc.mappers.UserSessionNoteMapper;
+import org.keycloak.protocol.oidc.mappers.SubMapper;
 import org.keycloak.representations.IDToken;
 import org.keycloak.representations.idm.ClientRepresentation;
 import org.keycloak.services.ServicesLogger;
+import org.keycloak.services.managers.AuthenticationManager;
 
 import java.util.HashMap;
 import java.util.HashSet;
@@ -87,6 +91,7 @@ public class OIDCLoginProtocolFactory extends AbstractLoginProtocolFactory {
     public static final String AUDIENCE_RESOLVE = "audience resolve";
     public static final String ALLOWED_WEB_ORIGINS = "allowed web origins";
     public static final String ACR = "acr loa level";
+    public static final String ORGANIZATION = "organization";
     // microprofile-jwt claims
     public static final String UPN = "upn";
     public static final String GROUPS = "groups";
@@ -95,6 +100,7 @@ public class OIDCLoginProtocolFactory extends AbstractLoginProtocolFactory {
     public static final String WEB_ORIGINS_SCOPE = "web-origins";
     public static final String MICROPROFILE_JWT_SCOPE = "microprofile-jwt";
     public static final String ACR_SCOPE = "acr";
+    public static final String BASIC_SCOPE = "basic";
 
     public static final String PROFILE_SCOPE_CONSENT_TEXT = "${profileScopeConsentText}";
     public static final String EMAIL_SCOPE_CONSENT_TEXT = "${emailScopeConsentText}";
@@ -102,27 +108,24 @@ public class OIDCLoginProtocolFactory extends AbstractLoginProtocolFactory {
     public static final String PHONE_SCOPE_CONSENT_TEXT = "${phoneScopeConsentText}";
     public static final String OFFLINE_ACCESS_SCOPE_CONSENT_TEXT = Constants.OFFLINE_ACCESS_SCOPE_CONSENT_TEXT;
     public static final String ROLES_SCOPE_CONSENT_TEXT = "${rolesScopeConsentText}";
+    public static final String ORGANIZATION_SCOPE_CONSENT_TEXT = "${organizationScopeConsentText}";
 
-    public static final String CONFIG_LEGACY_LOGOUT_REDIRECT_URI = "legacy-logout-redirect-uri";
-    public static final String SUPPRESS_LOGOUT_CONFIRMATION_SCREEN = "suppress-logout-confirmation-screen";
+    public static final String CONFIG_OIDC_REQ_PARAMS_MAX_NUMBER = "add-req-params-max-number";
+    public static final String CONFIG_OIDC_REQ_PARAMS_MAX_SIZE = "add-req-params-max-size";
+    public static final String CONFIG_OIDC_REQ_PARAMS_MAX_OVERALL_SIZE = "add-req-params-max-overall-size";
+    public static final String CONFIG_OIDC_REQ_PARAMS_FAIL_FAST = "add-req-params-fail-fast";
 
     private OIDCProviderConfig providerConfig;
 
     @Override
     public void init(Config.Scope config) {
-        initBuiltIns();
         this.providerConfig = new OIDCProviderConfig(config);
-        if (providerConfig.isLegacyLogoutRedirectUri()) {
-            logger.warnf("Deprecated switch '%s' is enabled. Please try to disable it and update your clients to use OpenID Connect compliant way for RP-initiated logout.", CONFIG_LEGACY_LOGOUT_REDIRECT_URI);
-        }
-        if (providerConfig.suppressLogoutConfirmationScreen()) {
-            logger.warnf("Deprecated switch '%s' is enabled. Please try to disable it and update your clients to use OpenID Connect compliant way for RP-initiated logout.", SUPPRESS_LOGOUT_CONFIRMATION_SCREEN);
-        }
+        initBuiltIns();
     }
 
     @Override
     public LoginProtocol create(KeycloakSession session) {
-        return new OIDCLoginProtocol().setSession(session);
+        return new OIDCLoginProtocol(this.providerConfig).setSession(session);
     }
 
     @Override
@@ -133,29 +136,29 @@ public class OIDCLoginProtocolFactory extends AbstractLoginProtocolFactory {
     private Map<String, ProtocolMapperModel> builtins = new HashMap<>();
 
     void initBuiltIns() {
-                ProtocolMapperModel model;
-        model = UserPropertyMapper.createClaimMapper(USERNAME,
+        ProtocolMapperModel model;
+        model = UserAttributeMapper.createClaimMapper(USERNAME,
                 "username",
-                "preferred_username", "String",
-                true, true);
+                "preferred_username", String.class.getSimpleName(),
+                true, true, true);
         builtins.put(USERNAME, model);
 
-        model = UserPropertyMapper.createClaimMapper(EMAIL,
+        model = UserAttributeMapper.createClaimMapper(EMAIL,
                 "email",
                 "email", "String",
-                true, true);
+                true, true, true);
         builtins.put(EMAIL, model);
 
-        model = UserPropertyMapper.createClaimMapper(GIVEN_NAME,
+        model = UserAttributeMapper.createClaimMapper(GIVEN_NAME,
                 "firstName",
                 "given_name", "String",
-                true, true);
+                true, true, true);
         builtins.put(GIVEN_NAME, model);
 
-        model = UserPropertyMapper.createClaimMapper(FAMILY_NAME,
+        model = UserAttributeMapper.createClaimMapper(FAMILY_NAME,
                 "lastName",
                 "family_name", "String",
-                true, true);
+                true, true, true);
         builtins.put(FAMILY_NAME, model);
 
         createUserAttributeMapper(MIDDLE_NAME, "middleName", IDToken.MIDDLE_NAME, "String");
@@ -175,10 +178,10 @@ public class OIDCLoginProtocolFactory extends AbstractLoginProtocolFactory {
         model = UserPropertyMapper.createClaimMapper(EMAIL_VERIFIED,
                 "emailVerified",
                 "email_verified", "boolean",
-                true, true);
+                true, true, true);
         builtins.put(EMAIL_VERIFIED, model);
 
-        ProtocolMapperModel fullName = FullNameMapper.create(FULL_NAME, true, true, true);
+        ProtocolMapperModel fullName = FullNameMapper.create(FULL_NAME, true, true, true, true);
         builtins.put(FULL_NAME, fullName);
 
         ProtocolMapperModel address = AddressMapper.createAddressMapper();
@@ -187,43 +190,51 @@ public class OIDCLoginProtocolFactory extends AbstractLoginProtocolFactory {
         model = UserSessionNoteMapper.createClaimMapper(KerberosConstants.GSS_DELEGATION_CREDENTIAL_DISPLAY_NAME,
                 KerberosConstants.GSS_DELEGATION_CREDENTIAL,
                 KerberosConstants.GSS_DELEGATION_CREDENTIAL, "String",
-                true, false);
+                true, false, true);
         builtins.put(KerberosConstants.GSS_DELEGATION_CREDENTIAL, model);
 
-        model = UserRealmRoleMappingMapper.create(null, REALM_ROLES, "realm_access.roles", true, false, true);
+        model = UserRealmRoleMappingMapper.create(null, REALM_ROLES, "realm_access.roles", true, false, true, true);
         builtins.put(REALM_ROLES, model);
 
-        model = UserClientRoleMappingMapper.create(null, null, CLIENT_ROLES, "resource_access.${client_id}.roles", true, false, true);
+        model = UserClientRoleMappingMapper.create(null, null, CLIENT_ROLES, "resource_access.${client_id}.roles", true, false, true, true);
         builtins.put(CLIENT_ROLES, model);
 
-        model = AudienceResolveProtocolMapper.createClaimMapper(AUDIENCE_RESOLVE);
+        model = AudienceResolveProtocolMapper.createClaimMapper(AUDIENCE_RESOLVE, true, true);
         builtins.put(AUDIENCE_RESOLVE, model);
 
-        model = AllowedWebOriginsProtocolMapper.createClaimMapper(ALLOWED_WEB_ORIGINS);
+        model = AllowedWebOriginsProtocolMapper.createClaimMapper(ALLOWED_WEB_ORIGINS, true, true);
         builtins.put(ALLOWED_WEB_ORIGINS, model);
 
         builtins.put(IMPERSONATOR_ID.getDisplayName(), UserSessionNoteMapper.createUserSessionNoteMapper(IMPERSONATOR_ID));
         builtins.put(IMPERSONATOR_USERNAME.getDisplayName(), UserSessionNoteMapper.createUserSessionNoteMapper(IMPERSONATOR_USERNAME));
 
-        model = UserPropertyMapper.createClaimMapper(UPN, "username",
+        model = UserAttributeMapper.createClaimMapper(UPN, "username",
                 "upn", "String",
-                true, true);
+                true, true, true);
         builtins.put(UPN, model);
 
-        model = UserRealmRoleMappingMapper.create(null, GROUPS, GROUPS, true, true, true);
+        model = UserRealmRoleMappingMapper.create(null, GROUPS, GROUPS, true, true, true, true);
         builtins.put(GROUPS, model);
 
         if (Profile.isFeatureEnabled(Profile.Feature.STEP_UP_AUTHENTICATION)) {
-            model = AcrProtocolMapper.create(ACR, true, true);
+            model = AcrProtocolMapper.create(ACR, true, true, true);
             builtins.put(ACR, model);
         }
+
+        model = UserSessionNoteMapper.createClaimMapper(IDToken.AUTH_TIME, AuthenticationManager.AUTH_TIME,
+                IDToken.AUTH_TIME, "long",
+                true, true, false, true);
+        builtins.put(IDToken.AUTH_TIME, model);
+
+        model = SubMapper.create(IDToken.SUBJECT,true, true);
+        builtins.put(IDToken.SUBJECT, model);
     }
 
     private void createUserAttributeMapper(String name, String attrName, String claimName, String type) {
         ProtocolMapperModel model = UserAttributeMapper.createClaimMapper(name,
                 attrName,
                 claimName, type,
-                true, true, false);
+                true, true, true, false);
         builtins.put(name, model);
     }
 
@@ -295,6 +306,19 @@ public class OIDCLoginProtocolFactory extends AbstractLoginProtocolFactory {
         addWebOriginsClientScope(newRealm);
         addMicroprofileJWTClientScope(newRealm);
         addAcrClientScope(newRealm);
+        addBasicClientScope(newRealm);
+        addServiceAccountClientScope(newRealm);
+
+        if (Profile.isFeatureEnabled(Profile.Feature.ORGANIZATION)) {
+            ClientScopeModel organizationScope = newRealm.addClientScope(OAuth2Constants.ORGANIZATION);
+            organizationScope.setDescription("Additional claims about the organization a subject belongs to");
+            organizationScope.setDisplayOnConsentScreen(true);
+            organizationScope.setConsentScreenText(ORGANIZATION_SCOPE_CONSENT_TEXT);
+            organizationScope.setIncludeInTokenScope(true);
+            organizationScope.setProtocol(getId());
+            organizationScope.addProtocolMapper(OrganizationMembershipMapper.create(ORGANIZATION, true, true, true));
+            newRealm.addDefaultClientScope(organizationScope, false);
+        }
     }
 
 
@@ -367,7 +391,7 @@ public class OIDCLoginProtocolFactory extends AbstractLoginProtocolFactory {
     }
 
 
-    public void addAcrClientScope(RealmModel newRealm) {
+    public ClientScopeModel addAcrClientScope(RealmModel newRealm) {
         if (Profile.isFeatureEnabled(Profile.Feature.STEP_UP_AUTHENTICATION)) {
             ClientScopeModel acrScope = KeycloakModelUtils.getClientScopeByName(newRealm, ACR_SCOPE);
             if (acrScope == null) {
@@ -385,10 +409,62 @@ public class OIDCLoginProtocolFactory extends AbstractLoginProtocolFactory {
             } else {
                 logger.debugf("Client scope '%s' already exists in realm '%s'. Skip creating it.", ACR_SCOPE, newRealm.getName());
             }
+            return acrScope;
         } else {
             logger.debugf("Skip creating client scope '%s' in the realm '%s' due the step-up authentication feature is disabled.", ACR_SCOPE, newRealm.getName());
+            return null;
         }
     }
+
+    public ClientScopeModel addBasicClientScope(RealmModel newRealm) {
+        ClientScopeModel basicScope = KeycloakModelUtils.getClientScopeByName(newRealm, BASIC_SCOPE);
+        if (basicScope == null) {
+            basicScope = newRealm.addClientScope(BASIC_SCOPE);
+            basicScope.setDescription("OpenID Connect scope for add all basic claims to the token");
+            basicScope.setDisplayOnConsentScreen(false);
+            basicScope.setIncludeInTokenScope(false);
+            basicScope.setProtocol(OIDCLoginProtocol.LOGIN_PROTOCOL);
+            basicScope.addProtocolMapper(builtins.get(IDToken.AUTH_TIME));
+            basicScope.addProtocolMapper(builtins.get(IDToken.SUBJECT));
+
+            newRealm.addDefaultClientScope(basicScope, true);
+
+            logger.debugf("Client scope '%s' created in the realm '%s'.", BASIC_SCOPE, newRealm.getName());
+        } else {
+            logger.debugf("Client scope '%s' already exists in realm '%s'. Skip creating it.", BASIC_SCOPE, newRealm.getName());
+        }
+        return basicScope;
+    }
+
+    public ClientScopeModel addServiceAccountClientScope(RealmModel newRealm) {
+        ClientScopeModel serviceAccountScope = KeycloakModelUtils.getClientScopeByName(newRealm, ServiceAccountConstants.SERVICE_ACCOUNT_SCOPE);
+        if (serviceAccountScope == null) {
+            serviceAccountScope = newRealm.addClientScope(ServiceAccountConstants.SERVICE_ACCOUNT_SCOPE);
+            serviceAccountScope.setDescription("Specific scope for a client enabled for service accounts");
+            serviceAccountScope.setDisplayOnConsentScreen(false);
+            serviceAccountScope.setIncludeInTokenScope(false);
+            serviceAccountScope.setProtocol(getId());
+            serviceAccountScope.addProtocolMapper(UserSessionNoteMapper.createClaimMapper(ServiceAccountConstants.CLIENT_ID_PROTOCOL_MAPPER,
+                    ServiceAccountConstants.CLIENT_ID,
+                    ServiceAccountConstants.CLIENT_ID, "String",
+                    true, true, true));
+            serviceAccountScope.addProtocolMapper(UserSessionNoteMapper.createClaimMapper(ServiceAccountConstants.CLIENT_HOST_PROTOCOL_MAPPER,
+                    ServiceAccountConstants.CLIENT_HOST,
+                    ServiceAccountConstants.CLIENT_HOST, "String",
+                    true, true, true));
+            serviceAccountScope.addProtocolMapper(UserSessionNoteMapper.createClaimMapper(ServiceAccountConstants.CLIENT_ADDRESS_PROTOCOL_MAPPER,
+                    ServiceAccountConstants.CLIENT_ADDRESS,
+                    ServiceAccountConstants.CLIENT_ADDRESS, "String",
+                    true, true, true));
+
+            logger.debugf("Client scope '%s' created in the realm '%s'.", ServiceAccountConstants.SERVICE_ACCOUNT_SCOPE, newRealm.getName());
+        } else {
+            logger.debugf("Client scope '%s' already exists in realm '%s'. Skip creating it.", ServiceAccountConstants.SERVICE_ACCOUNT_SCOPE, newRealm.getName());
+        }
+
+        return serviceAccountScope;
+    }
+
 
     @Override
     protected void addDefaults(ClientModel client) {
@@ -396,7 +472,7 @@ public class OIDCLoginProtocolFactory extends AbstractLoginProtocolFactory {
 
     @Override
     public Object createProtocolEndpoint(KeycloakSession session, EventBuilder event) {
-        return new OIDCLoginProtocolService(session, event, providerConfig);
+        return new OIDCLoginProtocolService(session, event);
     }
 
     @Override

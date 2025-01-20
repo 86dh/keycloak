@@ -28,10 +28,11 @@ import org.keycloak.models.AuthenticatorConfigModel;
 import org.keycloak.models.KeycloakSession;
 import org.keycloak.models.RealmModel;
 import org.keycloak.models.UserModel;
+import org.keycloak.models.light.LightweightUserAdapter;
 import org.keycloak.services.ServicesLogger;
 import org.keycloak.services.messages.Messages;
 
-import javax.ws.rs.core.Response;
+import jakarta.ws.rs.core.Response;
 import java.util.List;
 import java.util.Map;
 
@@ -66,16 +67,26 @@ public class IdpCreateUserIfUniqueAuthenticator extends AbstractIdpAuthenticator
             return;
         }
 
-        ExistingUserInfo duplication = checkExistingUser(context, username, serializedCtx, brokerContext);
+        ExistingUserInfo duplication = brokerContext.getIdpConfig().isTransientUsers() ? null : checkExistingUser(context, username, serializedCtx, brokerContext);
 
-        if (duplication == null) {
+        UserModel federatedUser = null;
+        if (brokerContext.getIdpConfig().isTransientUsers()) {
+            logger.debugf("Transient brokering requested. Recording user details for account '%s' and from identity provider '%s' .",
+                    username, brokerContext.getIdpConfig().getAlias());
+
+            federatedUser = new LightweightUserAdapter(session, context.getAuthenticationSession().getParentSession().getId());
+            federatedUser.setUsername(username);
+        } else if (duplication == null) {
             logger.debugf("No duplication detected. Creating account for user '%s' and linking with identity provider '%s' .",
                     username, brokerContext.getIdpConfig().getAlias());
 
-            UserModel federatedUser = session.users().addUser(realm, username);
+            federatedUser = session.users().addUser(realm, username);
+        }
+
+        if (federatedUser != null) {
             federatedUser.setEnabled(true);
 
-            for (Map.Entry<String, List<String>> attr : serializedCtx.getAttributes().entrySet()) {
+            for (Map.Entry<String, List<String>> attr : serializedCtx.getAttributes().entrySet().stream().sorted(Map.Entry.comparingByKey()).toList()) {
                 if (!UserModel.USERNAME.equalsIgnoreCase(attr.getKey())) {
                     federatedUser.setAttribute(attr.getKey(), attr.getValue());
                 }

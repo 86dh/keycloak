@@ -17,7 +17,6 @@
 
 package org.keycloak.protocol.oidc;
 
-import com.google.common.collect.Streams;
 import org.keycloak.OAuth2Constants;
 import org.keycloak.authentication.ClientAuthenticator;
 import org.keycloak.authentication.ClientAuthenticatorFactory;
@@ -34,6 +33,8 @@ import org.keycloak.models.KeycloakSession;
 import org.keycloak.models.RealmModel;
 import org.keycloak.protocol.oidc.endpoints.AuthorizationEndpoint;
 import org.keycloak.protocol.oidc.endpoints.TokenEndpoint;
+import org.keycloak.protocol.oidc.grants.PreAuthorizedCodeGrantType;
+import org.keycloak.protocol.oidc.grants.PreAuthorizedCodeGrantTypeFactory;
 import org.keycloak.protocol.oidc.grants.ciba.CibaGrantType;
 import org.keycloak.protocol.oidc.grants.device.endpoints.DeviceEndpoint;
 import org.keycloak.protocol.oidc.par.endpoints.ParEndpoint;
@@ -48,12 +49,13 @@ import org.keycloak.services.Urls;
 import org.keycloak.services.clientregistration.ClientRegistrationService;
 import org.keycloak.services.clientregistration.oidc.OIDCClientRegistrationProviderFactory;
 import org.keycloak.services.resources.RealmsResource;
+import org.keycloak.services.util.DPoPUtil;
 import org.keycloak.urls.UrlType;
 import org.keycloak.util.JsonSerialization;
 import org.keycloak.wellknown.WellKnownProvider;
 
-import javax.ws.rs.core.UriBuilder;
-import javax.ws.rs.core.UriInfo;
+import jakarta.ws.rs.core.UriBuilder;
+import jakarta.ws.rs.core.UriInfo;
 
 import java.net.URI;
 import java.util.AbstractMap;
@@ -82,12 +84,15 @@ public class OIDCWellKnownProvider implements WellKnownProvider {
     public static final List<String> DEFAULT_CLIENT_AUTH_SIGNING_ALG_VALUES_SUPPORTED = list(Algorithm.RS256.toString());
 
     // The exact list depends on protocolMappers
-    public static final List<String> DEFAULT_CLAIMS_SUPPORTED= list("aud", "sub", "iss", IDToken.AUTH_TIME, IDToken.NAME, IDToken.GIVEN_NAME, IDToken.FAMILY_NAME, IDToken.PREFERRED_USERNAME, IDToken.EMAIL, IDToken.ACR);
+    public static final List<String> DEFAULT_CLAIMS_SUPPORTED = list("aud", "sub", "iss", IDToken.AUTH_TIME, IDToken.NAME, IDToken.GIVEN_NAME, IDToken.FAMILY_NAME, IDToken.PREFERRED_USERNAME, IDToken.EMAIL, IDToken.ACR);
 
-    public static final List<String> DEFAULT_CLAIM_TYPES_SUPPORTED= list("normal");
+    public static final List<String> DEFAULT_CLAIM_TYPES_SUPPORTED = list("normal");
 
     // KEYCLOAK-7451 OAuth Authorization Server Metadata for Proof Key for Code Exchange
     public static final List<String> DEFAULT_CODE_CHALLENGE_METHODS_SUPPORTED = list(OAuth2Constants.PKCE_METHOD_PLAIN, OAuth2Constants.PKCE_METHOD_S256);
+
+    // See: GH-10701, note that the supported prompt value "create" is only added if the realm supports registrations.
+    public static final List<String> DEFAULT_PROMPT_VALUES_SUPPORTED = list(OIDCLoginProtocol.PROMPT_VALUE_NONE /*, OIDCLoginProtocol.PROMPT_VALUE_CREATE*/, OIDCLoginProtocol.PROMPT_VALUE_LOGIN, OIDCLoginProtocol.PROMPT_VALUE_CONSENT);
 
     private final KeycloakSession session;
     private final Map<String, Object> openidConfigOverride;
@@ -100,11 +105,18 @@ public class OIDCWellKnownProvider implements WellKnownProvider {
     public OIDCWellKnownProvider(KeycloakSession session, Map<String, Object> openidConfigOverride, boolean includeClientScopes) {
         DEFAULT_GRANT_TYPES_SUPPORTED = Stream.of(OAuth2Constants.AUTHORIZATION_CODE,
                 OAuth2Constants.IMPLICIT, OAuth2Constants.REFRESH_TOKEN, OAuth2Constants.PASSWORD, OAuth2Constants.CLIENT_CREDENTIALS,
-                OAuth2Constants.DEVICE_CODE_GRANT_TYPE,
                 OAuth2Constants.CIBA_GRANT_TYPE).collect(Collectors.toList());
         if (Profile.isFeatureEnabled(Profile.Feature.TOKEN_EXCHANGE)) {
             DEFAULT_GRANT_TYPES_SUPPORTED.add(OAuth2Constants.TOKEN_EXCHANGE_GRANT_TYPE);
         }
+
+        if (Profile.isFeatureEnabled(Profile.Feature.DEVICE_FLOW)) {
+            DEFAULT_GRANT_TYPES_SUPPORTED.add(OAuth2Constants.DEVICE_CODE_GRANT_TYPE);
+        }
+        if (Profile.isFeatureEnabled(Profile.Feature.OID4VC_VCI)) {
+            DEFAULT_GRANT_TYPES_SUPPORTED.add(PreAuthorizedCodeGrantTypeFactory.GRANT_TYPE);
+        }
+
         this.session = session;
         this.openidConfigOverride = openidConfigOverride;
         this.includeClientScopes = includeClientScopes;
@@ -127,11 +139,13 @@ public class OIDCWellKnownProvider implements WellKnownProvider {
         config.setIntrospectionEndpoint(backendUriBuilder.clone().path(OIDCLoginProtocolService.class, "token").path(TokenEndpoint.class, "introspect").build(realm.getName(), OIDCLoginProtocol.LOGIN_PROTOCOL).toString());
         config.setUserinfoEndpoint(backendUriBuilder.clone().path(OIDCLoginProtocolService.class, "issueUserInfo").build(realm.getName(), OIDCLoginProtocol.LOGIN_PROTOCOL).toString());
         config.setLogoutEndpoint(frontendUriBuilder.clone().path(OIDCLoginProtocolService.class, "logout").build(realm.getName(), OIDCLoginProtocol.LOGIN_PROTOCOL).toString());
-        config.setDeviceAuthorizationEndpoint(frontendUriBuilder.clone().path(OIDCLoginProtocolService.class, "auth")
-            .path(AuthorizationEndpoint.class, "authorizeDevice").path(DeviceEndpoint.class, "handleDeviceRequest")
-            .build(realm.getName(), OIDCLoginProtocol.LOGIN_PROTOCOL).toString());
+        if (Profile.isFeatureEnabled(Profile.Feature.DEVICE_FLOW)) {
+            config.setDeviceAuthorizationEndpoint(frontendUriBuilder.clone().path(OIDCLoginProtocolService.class, "auth")
+                    .path(AuthorizationEndpoint.class, "authorizeDevice").path(DeviceEndpoint.class, "handleDeviceRequest")
+                    .build(realm.getName(), OIDCLoginProtocol.LOGIN_PROTOCOL).toString());
+        }
         URI jwksUri = backendUriBuilder.clone().path(OIDCLoginProtocolService.class, "certs").build(realm.getName(),
-            OIDCLoginProtocol.LOGIN_PROTOCOL);
+                OIDCLoginProtocol.LOGIN_PROTOCOL);
 
         // NOTE: Don't hardcode HTTPS checks here. JWKS URI is exposed just in the development/testing environment. For the production environment, the OIDCWellKnownProvider
         // is not exposed over "http" at all.
@@ -156,6 +170,8 @@ public class OIDCWellKnownProvider implements WellKnownProvider {
         config.setGrantTypesSupported(DEFAULT_GRANT_TYPES_SUPPORTED);
         config.setAcrValuesSupported(getAcrValuesSupported(realm));
 
+        config.setPromptValuesSupported(getPromptValuesSupported(realm));
+
         config.setTokenEndpointAuthMethodsSupported(getClientAuthMethodsSupported());
         config.setTokenEndpointAuthSigningAlgValuesSupported(getSupportedClientSigningAlgorithms(false));
         config.setIntrospectionEndpointAuthMethodsSupported(getClientAuthMethodsSupported());
@@ -175,7 +191,9 @@ public class OIDCWellKnownProvider implements WellKnownProvider {
                     .filter(clientScope -> Objects.equals(OIDCLoginProtocol.LOGIN_PROTOCOL, clientScope.getProtocol()))
                     .map(ClientScopeModel::getName)
                     .collect(Collectors.toList());
-            scopeNames.add(0, OAuth2Constants.SCOPE_OPENID);
+            if (!scopeNames.contains(OAuth2Constants.SCOPE_OPENID)) {
+                scopeNames.add(0, OAuth2Constants.SCOPE_OPENID);
+            }
             config.setScopesSupported(scopeNames);
         }
 
@@ -190,8 +208,12 @@ public class OIDCWellKnownProvider implements WellKnownProvider {
         // https://tools.ietf.org/html/draft-ietf-oauth-mtls-08#section-6.2
         config.setTlsClientCertificateBoundAccessTokens(true);
 
+        if (Profile.isFeatureEnabled(Profile.Feature.DPOP)) {
+            config.setDpopSigningAlgValuesSupported(new ArrayList<>(DPoPUtil.DPOP_SUPPORTED_ALGS));
+        }
+
         URI revocationEndpoint = frontendUriBuilder.clone().path(OIDCLoginProtocolService.class, "revoke")
-            .build(realm.getName(), OIDCLoginProtocol.LOGIN_PROTOCOL);
+                .build(realm.getName(), OIDCLoginProtocol.LOGIN_PROTOCOL);
 
         // NOTE: Don't hardcode HTTPS checks here. JWKS URI is exposed just in the development/testing environment. For the production environment, the OIDCWellKnownProvider
         // is not exposed over "http" at all.
@@ -212,8 +234,18 @@ public class OIDCWellKnownProvider implements WellKnownProvider {
         MTLSEndpointAliases mtlsEndpointAliases = getMtlsEndpointAliases(config);
         config.setMtlsEndpointAliases(mtlsEndpointAliases);
 
+        config.setAuthorizationResponseIssParameterSupported(true);
+
         config = checkConfigOverride(config);
         return config;
+    }
+
+    protected List<String> getPromptValuesSupported(RealmModel realm) {
+        List<String> prompts = new ArrayList<>(DEFAULT_PROMPT_VALUES_SUPPORTED);
+        if (realm.isRegistrationAllowed()) {
+            prompts.add(OIDCLoginProtocol.PROMPT_VALUE_CREATE);
+        }
+        return prompts;
     }
 
     @Override
@@ -237,7 +269,7 @@ public class OIDCWellKnownProvider implements WellKnownProvider {
                 .map(ProviderFactory::getId);
 
         if (includeNone) {
-            supportedAlgorithms = Streams.concat(supportedAlgorithms, Stream.of("none"));
+            supportedAlgorithms = Stream.concat(supportedAlgorithms, Stream.of("none"));
         }
         return supportedAlgorithms.collect(Collectors.toList());
     }
@@ -297,7 +329,9 @@ public class OIDCWellKnownProvider implements WellKnownProvider {
         mtls_endpoints.setTokenEndpoint(config.getTokenEndpoint());
         mtls_endpoints.setRevocationEndpoint(config.getRevocationEndpoint());
         mtls_endpoints.setIntrospectionEndpoint(config.getIntrospectionEndpoint());
-        mtls_endpoints.setDeviceAuthorizationEndpoint(config.getDeviceAuthorizationEndpoint());
+        if (Profile.isFeatureEnabled(Profile.Feature.DEVICE_FLOW)) {
+            mtls_endpoints.setDeviceAuthorizationEndpoint(config.getDeviceAuthorizationEndpoint());
+        }
         mtls_endpoints.setRegistrationEndpoint(config.getRegistrationEndpoint());
         mtls_endpoints.setUserInfoEndpoint(config.getUserinfoEndpoint());
         mtls_endpoints.setBackchannelAuthenticationEndpoint(config.getBackchannelAuthenticationEndpoint());

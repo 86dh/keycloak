@@ -44,6 +44,22 @@ This can be achieved by add the `auth-server-quarkus` profile when running the t
 Unlike the "development" setup described above, this requires re-build the whole distribution
 after doing any change in the code.
 
+### Running tests using an embedded server
+
+For test driven development, it is possible to run the Keycloak server deployed on real Quarkus server.
+This can be achieved by add the `auth-server-quarkus-embedded` profile when running the testsuite.
+
+    mvn -f testsuite/integration-arquillian/pom.xml -Pauth-server-quarkus-embedded clean install -Dtest=LoginTest
+
+After running this command, you should also be able to run tests from your IDE. For that, make sure you have the `auth-server-quarkus-embedded` profile enabled.
+
+When running in embedded mode, the `build` phase happens every time the server is started, and it is based on the same configuration used during a full-distribution test run(e.g.: `auth-server-quarkus` profile is active).
+
+There are a few limitations when running tests. The well-known limitations are:
+
+* FIPS tests not working
+* Re-starting the server during a test execution is taking too much metaspace. Need more investigation.
+
 ## Debugging - tips & tricks
 
 ### Arquillian debugging
@@ -92,7 +108,7 @@ Analogically, there is the same behaviour for JBoss based app server as for auth
     -Dapp.server.debug.port=$PORT
     -Dapp.server.debug.suspend=y
     
-When you are debugging cluster adapter tests (For example OIDCAdapterClusterTest) you may use ports 7901 and 7902 for the app
+When you are debugging cluster adapter tests (For example SAMLAdapterClusterTest) you may use ports 7901 and 7902 for the app
 server nodes. Tests are usually using 2 cluster adapter nodes.    
 
 ## Testsuite logging
@@ -121,75 +137,54 @@ and add packages manually.
 
 ## Run adapter tests
 
-### Undertow
-    mvn -f testsuite/integration-arquillian/tests/base/pom.xml \
-        -Dtest=org.keycloak.testsuite.adapter.**.*Test
-
-### Jetty
-
-At the moment we can run the testsuite with Jetty `9.4`.
-Each version has its corresponding profile:
-
-* Jetty `9.4`: `app-server-jetty94`
-
-Here's how to run the tests with Jetty `9.4`:
-
-    mvn -f testsuite/integration-arquillian/pom.xml \
-        -Papp-server-jetty94 \
-        -Dtest=org.keycloak.testsuite.adapter.**.*Test
+Running the tests with SAML adapter (OIDC java adapters were removed):
 
 ### Wildfly
 
-    # Run tests
-    mvn -f testsuite/integration-arquillian/pom.xml \
+Build the application servers
+
+    mvn clean install -DskipTests -Pbuild-app-servers -f testsuite/integration-arquillian/servers/app-server/pom.xml
+
+Run tests with SAML applications deployed on Wildfly:
+
+    mvn -f testsuite/integration-arquillian/tests/base/pom.xml \
        clean install \
        -Papp-server-wildfly \
        -Dtest=org.keycloak.testsuite.adapter.**
-
-### Tomcat
-
-We run testsuite with Tomcat 7, 8 and 9. For specific versions see properties `${tomcat[7,8,9].version}` in parent [pom.xml](../../pom.xml).
-
-To run tests on Tomcat:
-
-````
-mvn -f testsuite/integration-arquillian/pom.xml \
-       clean install \
-       -Papp-server-tomcat[7,8,9] \
-       -Dtest=org.keycloak.testsuite.adapter.**
-````
 
 ## Migration test
 
 ### DB migration test
 
-This test will:
-- start MariaDB on docker container. Docker/Podman on your laptop is a requirement for this test.
-- start Keycloak 17.0.0 (replace with the other version if needed)
-- import realm and add some data to MariaDB
-- stop Keycloak 17.0.0
-- start latest Keycloak, which automatically updates DB from 17.0.0
-- Perform a couple of tests to verify data after the update are correct
+The `MigrationTest` test will:
+- Start database on docker container. Docker/Podman on your laptop is a requirement for this test.
+- Start Keycloak old version 19.0.3.
+- Import realm and add some data to the database.
+- Stop Keycloak 19.0.3.
+- Start latest Keycloak, which automatically updates DB from 19.0.3.
+- Perform a couple of tests to verify data after the update are correct.
 - Stop MariaDB docker container. In case of a test failure, the MariaDB container is not stopped, so you can manually inspect the database.
 
-The first version of Keycloak on Quarkus is version `17.0.0`.
-Therefore, it is not possible to define the older version.
+The first version of Keycloak on Quarkus is version `17.0.0`, but the initial versions have a complete different set of boot options that make co-existance impossible.
+Therefore the first version that can be tested is `19.0.3`.
 You can execute those tests as follows:
 ```
-export OLD_KEYCLOAK_VERSION=17.0.0
+export OLD_KEYCLOAK_VERSION=19.0.3
+export DATABASE=mariadb
 
 mvn -B -f testsuite/integration-arquillian/pom.xml \
   clean install \
-  -Pjpa,auth-server-quarkus,db-mariadb,auth-server-migration \
+  -Pjpa,auth-server-quarkus,db-$DATABASE,auth-server-migration \
   -Dtest=MigrationTest \
   -Dmigration.mode=auto \
   -Dmigrated.auth.server.version=$OLD_KEYCLOAK_VERSION \
-  -Dprevious.product.unpacked.folder.name=keycloak-$OLD_KEYCLOAK_VERSION \
   -Dmigration.import.file.name=migration-realm-$OLD_KEYCLOAK_VERSION.json \
   -Dauth.server.ssl.required=false \
-  -Djdbc.mvn.version=2.2.4 \
-  -Dsurefire.failIfNoSpecifiedTests=false
+  -Dauth.server.db.host=localhost
 ```
+
+The `DATABASE` variable can be: `mariadb`, `mysql`, `postgres`, `mssql` or `oracle`.
+As commented `OLD_KEYCLOAK_VERSION` can only be `19.0.3` right now.
 
 For the available versions of old keycloak server, you can take a look to [this directory](tests/base/src/test/resources/migration-test) .
 
@@ -204,47 +199,6 @@ The test is executed in same way as the "auto" DB migration test with the only d
 that you need to use property `migration.mode` with the value `manual` .
 
     -Dmigration.mode=manual
-
-## Old Admin Console UI tests
-The UI tests are real-life, UI focused integration tests. Hence they do not support the default HtmlUnit browser. Only the following real-life browsers are supported: Mozilla Firefox and Google Chrome. For details on how to run the tests with these browsers, please refer to [Different Browsers](#different-browsers) chapter.
-
-The UI tests are focused on the Admin Console. They are placed in the `old-admin-console` module and are disabled by default.
-
-The tests also use some constants placed in [test-constants.properties](tests/base/src/test/resources/test-constants.properties). A different file can be specified by `-Dtestsuite.constants=path/to/different-test-constants.properties`
-
-In case a custom `settings.xml` is used for Maven, you need to specify it also in `-Dkie.maven.settings.custom=path/to/settings.xml`.
-
-#### Execution example
-```
-mvn -f testsuite/integration-arquillian/tests/other/old-admin-console/pom.xml \
-    clean test \
-    -Dbrowser=firefox \
-    -Dfirefox_binary=/opt/firefox-45.1.1esr/firefox
-```
-
-## Spring Boot adapter tests
-
-Currently, we are testing Spring Boot with three different containers `Tomcat 8`, `Undertow` and `Jetty 9.4`. 
-We are testing various versions of Spring Boot 2.x. All versions are specified in [root pom.xml](../../pom.xml) (i.e. see properties `spring-boot24.version` and `spring-boot26.version`).
-To run tests execute following command. Default version of Spring Boot is 2.4.x, to run tests with version 2.6.x add profile `-Pspringboot26`.
-
-```
-mvn -f testsuite/integration-arquillian/tests/other/springboot-tests/pom.xml \
-    clean test \
-    -Dadapter.container=[tomcat|undertow|jetty94] \
-    [-Pspringboot26]
-```
-
-## Base UI tests
-Similarly to Admin Console tests, these tests are focused on UI, specifically on the parts of the server that are accessed by an end user (like Login page, or Account Console).
-They are designed to work with mobile browsers (alongside the standard desktop browsers). For details on the supported browsers and their configuration please refer to [Different Browsers chapter](#different-browsers).
-#### Execution example
-```
-mvn -f testsuite/integration-arquillian/tests/other/base-ui/pom.xml \
-    clean test \
-    -Pandroid \
-    -Dappium.avd=Nexus_5X_API_27
-```
 
 ## Disabling features
 Some features in Keycloak can be disabled. To run the testsuite with a specific feature disabled use the `auth.server.feature` system property. For example to run the tests with authorization disabled run:
@@ -316,7 +270,7 @@ An example social.properties file looks like:
     facebook.profile.lastName=Test
 
 In the example above the common username, password and profile are shared for all providers, but Facebook has a
-different last name. Profile informations are used for assertion after login, so you have to set them to be same as
+different last name. Profile information is used for assertion after login, so you have to set it to be same as
 user profile information returned by given social login provider for used sample user.
 
 Some providers actively block bots so you need to use a proper browser to test. Either Firefox or Chrome should work.
@@ -337,22 +291,16 @@ You can use many different real-world browsers to run the integration tests.
 Although technically they can be run with almost every test in the testsuite, they can fail with some of them as the tests often require specific optimizations for given browser. Therefore, only some of the test modules have support to be run with specific browsers.
 
 #### Mozilla Firefox
-* **Supported test modules:** `console`, `base-ui`
+* **Supported test modules:** `console`
 * **Supported version:** latest stable
 * **Driver download required:** [GeckoDriver](https://github.com/mozilla/geckodriver/releases)
 * **Run with:** `-Dbrowser=firefox -Dwebdriver.gecko.driver=path/to/geckodriver`; optionally you can specify `-Dfirefox_binary=path/to/firefox/binary`
 
 #### Google Chrome
-* **Supported test modules:** `console`, `base-ui`
+* **Supported test modules:** `console`
 * **Supported version:** latest stable
 * **Driver download required:** [ChromeDriver](https://sites.google.com/a/chromium.org/chromedriver/) that corresponds with your version of the browser
 * **Run with:** `-Dbrowser=chrome -Dwebdriver.chrome.driver=path/to/chromedriver`
-
-#### Apple Safari
-* **Supported test modules:** `base-ui`
-* **Supported version:** latest stable
-* **Driver download required:** no (the driver is bundled with macOS)
-* **Run with:** `-Dbrowser=safari`
 
 #### [DEPRECATED] Mozilla Firefox with legacy driver
 * **Supported test modules:** `console`
@@ -363,34 +311,6 @@ Although technically they can be run with almost every test in the testsuite, th
 #### Automatic driver downloads
 You can rely on automatic driver downloads which is provided by [Arquillian Drone](http://arquillian.org/arquillian-extension-drone/#_automatic_download). To do so just omit the `-Dwebdriver.{browser}.driver` CLI argument when running the tests.
 By default latest driver version is always downloaded. To download a specific version, add `-DfirefoxDriverVersion` or `-DchromeDriverVersion` CLI argument.
-
-#### Mobile browsers
-The support for testing with the mobile browsers is implemented using the [Appium](http://appium.io/) project.
-This means the tests can be run with a real mobile browser in a real mobile OS. However, only emulators/simulators of mobile devices are supported at the moment (no physical devices) in our testsuite.
-
-First, you need to install the Appium server. If you have Node.js and npm installed on your machine, you can do that with: `npm install -g appium`. For further details and requirements please refer to the [official Appium documentation](http://appium.io/docs/en/about-appium/intro/).
-The tests will try to start the Appium server automatically but you can do it manually as well (just by executing `appium`).
-
-To use a mobile browser you need to create a virtual device. The most convenient way to do so is to install the desired platform's IDE - either [Android Studio](https://developer.android.com/studio/) (for Android devices) or [Xcode](https://developer.apple.com/xcode/) (for iOS devices) - then you can create a device (smartphone/tablet) there. For details please refer to documentation of those IDEs.
-
-#### Google Chrome on Android
-* **Supported test modules:** `base-ui`
-* **Supported host OS:** Windows, Linux, macOS
-* **Supported browser version:** latest stable
-* **Supported mobile OS version:** Android 7.x, 8.x
-* **Run with:** `mvn clean test -Pandroid -Dappium.avd=name_of_the_AVD` where AVD is the name of your Android Virtual Device (e.g. `Nexus_5X_API_27`)
-
-**Tips & tricks:**
-* If the AVD name contains any spaces, you need to replace them with underscores when specifying the `-Dappium.avd=...`.
-* It's probable that a freshly created device will contain an outdated Chrome version. To update to the latest version (without using the Play Store) you need to download an `.apk` for Chrome and install it with `adb install -r path/to/chrome.apk`.
-* Chrome on Android uses ChromeDriver similarly to regular desktop Chrome. The ChromeDriver is bundled with the Appium server. To use a newer ChromeDriver please follow the [Appium documentation](http://appium.io/docs/en/writing-running-appium/web/chromedriver/).
-
-#### Apple Safari on iOS
-* **Supported test modules:** `base-ui`
-* **Supported host OS:** macOS
-* **Supported browser version:** _depends on the mobile OS version_
-* **Supported mobile OS version:** iOS 11.x
-* **Run with:** `mvn clean test -Pios -Dappium.deviceName=device_name` where the device name is your device identification (e.g. `iPhone X`)
 
 ## Disabling TLS (SSL) in the tests
 
@@ -406,7 +326,7 @@ so please make sure you rebuild all `testsuite/integration-arquillian` child mod
 
 ## Cluster tests
 
-Cluster tests use 2 backend servers (Keycloak on Wildfly/EAP or Keycloak on Undertow), 1 frontend loadbalancer server node and one shared DB. Invalidation tests don't use loadbalancer.
+Cluster tests use 2 backend servers (Keycloak on Quarkus or Keycloak on Undertow), 1 frontend loadbalancer server node and one shared DB. Invalidation tests don't use loadbalancer.
 The browser usually communicates directly with the backend node1 and after doing some change here (eg. updating user), it verifies that the change is visible on node2 and user is updated here as well.
 
 Failover tests use loadbalancer and they require the setup with the distributed infinispan caches switched to have 2 owners (default value is 1 owner). Otherwise failover won't reliably work.
@@ -425,17 +345,17 @@ Make sure the `testsuite/integration-arquillian/servers/auth-server/quarkus` mod
     mvn -f testsuite/integration-arquillian/servers/auth-server/quarkus/pom.xml clean install \
          -Pauth-server-cluster-quarkus
 
-Run tests using the `auth-server-cluster-quarkus` profile:
+Run tests using the `auth-server-cluster-quarkus` profile and with a database which is not H2:
 
      mvn -f testsuite/integration-arquillian/tests/base/pom.xml clean install \
-     -Pauth-server-cluster-quarkus \
+     -Pauth-server-cluster-quarkus,db-postgres \
      -Dsession.cache.owners=2  \
      -Dtest=AuthenticationSessionFailoverClusterTest
      
 Alternatively, you can perform both steps using the following command:
 
     mvn -f testsuite/integration-arquillian/pom.xml clean install \
-    -Pauth-server-cluster-quarkus \
+    -Pauth-server-cluster-quarkus,db-postgres \
     -Dsession.cache.owners=2 \
     -Dtest=AuthenticationSessionFailoverClusterTest
      
@@ -448,7 +368,7 @@ To run tests using a different database such as PostgreSQL, add the following pr
 
 ```
 # HA using PostgreSQL
-%ha.datasource.dialect=org.hibernate.dialect.PostgreSQL9Dialect
+%ha.datasource.dialect=org.hibernate.dialect.PostgreSQLDialect
 %ha.datasource.driver = org.postgresql.xa.PGXADataSource
 %ha.datasource.url = jdbc:postgresql://localhost/keycloak
 %ha.datasource.username = keycloak
@@ -465,7 +385,6 @@ This is temporary and database configuration should be more integrated with the 
 
 Activate the following profiles:
 
-* `quarkus`
 * `auth-server-cluster-quarkus`
 
 Then run any cluster test as usual.
@@ -517,7 +436,7 @@ and argument: `-p 8181`
 
 Cross-DC tests use 2 data centers, each with one automatically started and one manually controlled backend servers,
 and 1 frontend loadbalancer server node that sits in front of all servers.
-The browser usually communicates directly with the frontent node and the test controls where the HTTP requests
+The browser usually communicates directly with the frontend node and the test controls where the HTTP requests
 land by adjusting load balancer configuration (e.g. to direct the traffic to only a single DC).
 
 For an example of a test, see [org.keycloak.testsuite.crossdc.ActionTokenCrossDCTest](tests/base/src/test/java/org/keycloak/testsuite/crossdc/ActionTokenCrossDCTest.java).
@@ -800,7 +719,7 @@ the same time both hosts must use different domains to be considered cross-origi
 Also, those new cookies policies are currently not yet enabled by default (which will change in the near future). To test
 those policies, you need the latest stable Firefox together with `firefox-strict-cookies` profile. This profile sets the
 browser to Firefox, configures the proper cookies behavior and makes Firefox to run in the headless mode (which is ok
-because this is not UI testing). For debugging purposes you can override the headless mode with `-DfirefoxHeadless=false`. 
+because this is not UI testing). For debugging purposes you can override the headless mode with `-DfirefoxArguments=''`. 
 
 **Broker tests:**
 
@@ -827,113 +746,6 @@ because this is not UI testing). For debugging purposes you can override the hea
 For changing the hostname in the hostname tests (e.g. [DefaultHostnameTest](https://github.com/keycloak/keycloak/blob/main/testsuite/integration-arquillian/tests/base/src/test/java/org/keycloak/testsuite/url/DefaultHostnameTest.java)),
 we rely on [nip.io](https://nip.io) for DNS switching, so tests will work everywhere without fiddling with `etc/hosts` locally. 
 
-## Running base testsuite with Map storage
-
-To run base testsuite with new storage run the following command (this will execute testsuite with ConcurrentHashMap storage):
-```shell
-mvn clean install -f testsuite/integration-arquillian/tests/base \
-                  -Pauth-server-quarkus -Pmap-storage-chm
-```
-
-### Running tests with JPA Map storage
-
-By default, testing with the profile `map-storage-jpa-postgres` spawns a new Postgres container
-with each test execution. The default image used is `postgres:alpine`. To spawn a different
-version, use the system property `keycloak.map.storage.postgres.docker.image`.
-
-In a similar way the profile `map-storage-jpa-cockroach` spawns a new CockroachDB container
-with each test execution. It uses the official CockroachDB image in the version stated in the
-class `CockroachdbContainerTestEnricher`. To spawn a different
-version, use the system property `keycloak.map.storage.cockroachdb.docker.image`.
-
-Execute tests:
-```shell
-mvn clean install -f testsuite/integration-arquillian/tests/base \
-                  -Pmap-storage-jpa-postgres
-```
-
-It's also possible to configure tests to connect to an external database, it might be useful 
-for debugging purposes as the database is not removed after the testsuite run. On the other hand
-it'll require manual cleaning between two runs.
-
-PostgreSQL database can be started e.g. by following command:
-```shell
-podman run --name postgres -p 5432:5432 -e POSTGRES_PASSWORD=pass -e POSTGRES_USER=keycloak -e POSTGRES_DB=keycloak -d postgres:alpine
-```
-
-To run the tests without spawning the container for you, execute tests with the following command:
-```shell
-mvn clean install -f testsuite/integration-arquillian/tests/base \
-  -Pmap-storage-jpa-postgres \
-  -Dpostgres.start-container=false \
-  -Dkeycloak.map.storage.connectionsJpa.url=<jdbc_url> \
-  -Dkeycloak.map.storage.connectionsJpa.user=<user> \
-  -Dkeycloak.map.storage.connectionsJpa.password=<password>
-```
-
-### Running tests with HotRod Map storage
-
-By default, Base testsuite with `map-storage-hotrod` profile spawn a new Infinispan container
-with each test execution. To run the tests execute:
-```shell
-mvn clean install -f testsuite/integration-arquillian/tests/base \
-                  -Pmap-storage-hotrod
-```
-Note: For running Infinispan server we are using Testcontainer, see section 
-_Usage of Testcontainers_ for details on how to set up your container engine.
-
-It is also possible, to configure Base testsuite to
-connect to an external instance of Infinispan. To do so, execute tests with
-the following command:
-```shell
-mvn clean install -f testsuite/integration-arquillian/tests/base \
-                  -Pmap-storage-hotrod
-                  -Dkeycloak.testsuite.start-hotrod-container=false \
-                  -Dkeycloak.connectionsHotRod.host=<host> \
-                  -Dkeycloak.connectionsHotRod.port=<port> \
-                  -Dkeycloak.connectionsHotRod.username=<username> \
-                  -Dkeycloak.connectionsHotRod.password=<password>
-```
-
-### Usage of Testcontainers
-
-Some profiles within model tests require running 3rd party software, for
-example, database or Infinispan. For running these we are using
-[Testcontainers](https://www.testcontainers.org/). This may require some
-additional configuration of your container engine.
-
-#### Podman settings
-
-For more details see the following [Podman guide from Quarkus webpage](https://quarkus.io/guides/podman).
-
-Specifically, these steps are required:
-```shell
-# Enable the podman socket with Docker REST API (only needs to be done once)
-systemctl --user enable podman.socket --now
-
-# Set the required environment variables (need to be run everytime or added to profile)
-export DOCKER_HOST=unix:///run/user/${UID}/podman/podman.sock
-```
-
-Testcontainers are using [ryuk](https://hub.docker.com/r/testcontainers/ryuk)
-to cleanup containers after tests. To make this work with Podman add the
-following line to `~/.testcontainers.properties`
-```shell
-ryuk.container.privileged=true
-```
-Alternatively, disable usage of ryuk (using this may result in stale containers
-still running after tests finish. This is not recommended especially if you are
-executing tests from Intellij IDE as it [may not stop](https://youtrack.jetbrains.com/issue/IDEA-190385)
-the containers created during test run).
-```shell
-export TESTCONTAINERS_RYUK_DISABLED=true #not recommended - see above!
-```
-
-#### Docker settings
-
-To use Testcontainers with Docker it is necessary to
-[make Docker available for non-root users](https://docs.docker.com/engine/install/linux-postinstall/).
-
 ### Tips & Tricks:
 Although it _should_ work in general, you may experience an exception like this:
 ```
@@ -944,13 +756,27 @@ DefaultHostnameTest.java:226)
 ...
 ```
 when running these tests on your local machine. This happens when something on your machine or network is blocking DNS queries to [nip.io](https://nip.io)
-One possible workaround is to add a commonly used public dns server (e.g. 8.8.8.8 for google dns server) to your local 
-networks dns configuration and run the tests. 
+In order to avoid using external services for DNS resolution, the tests are executed using a local host file by setting the `-Djdk.net.hosts.file=${project.build.testOutputDirectory}/hosts_file` 
+system property.
 
 ## FIPS 140-2 testing
 
-On the FIPS enabled platform with FIPS enabled OpenJDK 11, you can run this to test against Keycloak server on Quarkus
-with FIPS 140.2 integration enabled
+### Unit tests
+
+```
+mvn clean install -f crypto/fips1402
+```
+
+To run unit tests with the BouncyCastle approved mode, which is more strict in the used crypto algorithms:
+```
+mvn clean install -f crypto/fips1402 -Dorg.bouncycastle.fips.approved_only=true
+```
+
+### Integration tests
+
+On the FIPS enabled platform with FIPS enabled OpenJDK 21, you can run this to test against a Keycloak server on Quarkus
+with FIPS 140-2 integration enabled
+
 ```
 mvn -B -f testsuite/integration-arquillian/pom.xml \
   clean install \
@@ -963,8 +789,44 @@ there should be messages similar to those:
 ```
 2022-10-11 19:34:29,521 DEBUG [org.keycloak.common.crypto.CryptoIntegration] (main) Using the crypto provider: org.keycloak.crypto.fips.FIPS1402Provider
 2022-10-11 19:34:31,072 TRACE [org.keycloak.common.crypto.CryptoIntegration] (main) Java security providers: [ 
- KC(BCFIPS version 1.000203) version 1.0 - class org.keycloak.crypto.fips.KeycloakFipsSecurityProvider, 
+ KC(BCFIPS version 1.000203, FIPS-JVM: enabled) version 1.0 - class org.keycloak.crypto.fips.KeycloakFipsSecurityProvider, 
  BCFIPS version 1.000203 - class org.bouncycastle.jcajce.provider.BouncyCastleFipsProvider, 
  BCJSSE version 1.001202 - class org.bouncycastle.jsse.provider.BouncyCastleJsseProvider,
 ]
+```
+
+### BCFIPS approved mode
+
+For running testsuite with server using BCFIPS approved mode, those additional properties should be added when running tests:
+```
+-Dauth.server.fips.mode=strict \
+-Dauth.server.supported.keystore.types=BCFKS \
+-Dauth.server.keystore.type=bcfks \
+-Dauth.server.supported.rsa.key.sizes=2048,4096
+```
+The log should contain `KeycloakFipsSecurityProvider` mentioning "Approved mode". Something like:
+```
+KC(BCFIPS version 1.000203 Approved Mode, FIPS-JVM: enabled) version 1.0 - class org.keycloak.crypto.fips.KeycloakFipsSecurityProvider,
+```
+
+## Aurora DB Tests
+To run the Aurora DB tests on a local machine, do the following:
+
+1. Provision an Aurora DB:
+```bash
+AURORA_CLUSTER="example-cluster"
+AURORA_REGION=eu-west-1
+AURORA_PASSWORD=TODO
+source ./.github/scripts/aws/rds/aurora_create.sh
+```
+
+2. Execute the store integration tests:
+```bash
+TESTS=`testsuite/integration-arquillian/tests/base/testsuites/suite.sh database`
+mvn test -Pauth-server-quarkus -Pdb-aurora-postgres -Dtest=$TESTS  -Dauth.server.db.host=$AURORA_ENDPOINT -Dkeycloak.connectionsJpa.password=$AURORA_PASSWORD -pl testsuite/integration-arquillian/tests/base
+```
+
+3. Teardown Aurora DB instance:
+```bash
+./.github/scripts/aws/rds/aurora_delete.sh
 ```

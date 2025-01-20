@@ -25,7 +25,9 @@ import org.keycloak.representations.idm.PartialImportRepresentation;
 import org.keycloak.representations.idm.RoleRepresentation;
 import org.keycloak.services.ErrorResponse;
 
-import javax.ws.rs.core.Response;
+import jakarta.ws.rs.core.Response;
+import org.keycloak.services.ErrorResponseException;
+
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -108,7 +110,7 @@ public class ClientRolesPartialImport {
         client.removeRole(role);
     }
 
-    public void prepare(PartialImportRepresentation partialImportRep, RealmModel realm, KeycloakSession session) throws ErrorResponseException {
+    public void prepare(PartialImportRepresentation partialImportRep, RealmModel realm, KeycloakSession session) {
         Map<String, List<RoleRepresentation>> repList = getRepList(partialImportRep);
         if (repList == null || repList.isEmpty()) return;
 
@@ -137,14 +139,12 @@ public class ClientRolesPartialImport {
     }
 
     protected ErrorResponseException exists(String message) {
-        Response error = ErrorResponse.exists(message);
-        return new ErrorResponseException(error);
+        throw ErrorResponse.exists(message);
     }
 
     protected ErrorResponseException noClientFound(String clientId) {
         String message = "Can not import client roles for nonexistent client named " + clientId;
-        Response error = ErrorResponse.error(message, Response.Status.PRECONDITION_FAILED);
-        return new ErrorResponseException(error);
+        throw ErrorResponse.error(message, Response.Status.PRECONDITION_FAILED);
     }
 
     public PartialImportResult overwritten(String clientId, String modelId, RoleRepresentation roleRep) {

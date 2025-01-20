@@ -27,6 +27,7 @@ import org.junit.rules.TestRule;
 import org.junit.runners.model.Statement;
 import org.keycloak.OAuth2Constants;
 import org.keycloak.authentication.authenticators.client.ClientIdAndSecretAuthenticator;
+import org.keycloak.common.util.Time;
 import org.keycloak.events.Details;
 import org.keycloak.events.EventType;
 import org.keycloak.representations.idm.ClientRepresentation;
@@ -38,9 +39,14 @@ import org.keycloak.util.TokenUtil;
 
 import java.util.Arrays;
 import java.util.HashMap;
+import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.TimeUnit;
+
+import static org.hamcrest.Matchers.emptyOrNullString;
 import static org.hamcrest.Matchers.is;
+import static org.hamcrest.MatcherAssert.assertThat;
 import static org.keycloak.testsuite.util.ServerURLs.getAuthServerContextRoot;
 
 /**
@@ -77,7 +83,11 @@ public class AssertEvents implements TestRule {
     }
 
     public EventRepresentation poll() {
-        EventRepresentation event = fetchNextEvent();
+        return poll(0);
+    }
+
+    public EventRepresentation poll(int seconds) {
+        EventRepresentation event = fetchNextEvent(seconds);
         Assert.assertNotNull("Event expected", event);
 
         return event;
@@ -93,7 +103,7 @@ public class AssertEvents implements TestRule {
     }
 
     public ExpectedEvent expectRequiredAction(EventType event) {
-        return expectLogin().event(event).removeDetail(Details.CONSENT).session(Matchers.isEmptyOrNullString());
+        return expectLogin().event(event).removeDetail(Details.CONSENT).session(is(emptyOrNullString()));
     }
 
     public ExpectedEvent expectLogin() {
@@ -174,7 +184,7 @@ public class AssertEvents implements TestRule {
     }
 
     public ExpectedEvent expectLogout(String sessionId) {
-        return expect(EventType.LOGOUT).client((String) null)
+        return expect(EventType.LOGOUT)
                 .detail(Details.REDIRECT_URI, Matchers.equalTo(DEFAULT_REDIRECT_URI))
                 .session(sessionId);
     }
@@ -189,7 +199,7 @@ public class AssertEvents implements TestRule {
     public ExpectedEvent expectRegister(String username, String email) {
         return expectRegister(username, email, DEFAULT_CLIENT_ID);
     }
-    
+
     public ExpectedEvent expectRegister(String username, String email, String clientId) {
         UserRepresentation user = username != null ? getUser(username) : null;
         return expect(EventType.REGISTER)
@@ -199,6 +209,15 @@ public class AssertEvents implements TestRule {
                 .detail(Details.EMAIL, email)
                 .detail(Details.REGISTER_METHOD, "form")
                 .detail(Details.REDIRECT_URI, Matchers.equalTo(DEFAULT_REDIRECT_URI));
+    }
+
+    public ExpectedEvent expectIdentityProviderFirstLogin(RealmRepresentation realm, String identityProvider, String idpUsername) {
+        return expect(EventType.IDENTITY_PROVIDER_FIRST_LOGIN)
+                .client("broker-app")
+                .realm(realm)
+                .user((String)null)
+                .detail(Details.IDENTITY_PROVIDER, identityProvider)
+                .detail(Details.IDENTITY_PROVIDER_USERNAME, idpUsername);
     }
 
     public ExpectedEvent expectRegisterError(String username, String email) {
@@ -356,20 +375,56 @@ public class AssertEvents implements TestRule {
         }
 
         public EventRepresentation assertEvent() {
-            return assertEvent(poll());
+            return assertEvent(false, 0);
+        }
+
+        public EventRepresentation assertEvent(boolean ignorePreviousEvents) {
+            return assertEvent(ignorePreviousEvents, 0);
+        }
+
+        /**
+         * Assert the expected event was sent to the listener by Keycloak server. Returns this event.
+         *
+         * @param ignorePreviousEvents if true, test will ignore all the events, which were already present. Test will poll the events from the queue until it finds the event of expected type
+         * @param seconds The seconds to wait for the next event to come
+         * @return the expected event
+         */
+        public EventRepresentation assertEvent(boolean ignorePreviousEvents, int seconds) {
+            if (expected.getError() != null && ! expected.getType().endsWith("_ERROR")) {
+                expected.setType(expected.getType() + "_ERROR");
+            }
+
+            if (ignorePreviousEvents) {
+                // Consider 25 as a "limit" for maximum number of events in the queue for now
+                List<String> presentedEventTypes = new LinkedList<>();
+                for (int i = 0 ; i < 25 ; i++) {
+                    EventRepresentation event = fetchNextEvent(seconds);
+                    if (event != null) {
+                        if (expected.getType().equals(event.getType())) {
+                            return assertEvent(event);
+                        } else {
+                            presentedEventTypes.add(event.getType());
+                        }
+                    }
+                }
+                Assert.fail("Did not find the event of expected type " + expected.getType() +". Events present: " + presentedEventTypes);
+                return null; // Unreachable code
+            } else {
+                return assertEvent(poll());
+            }
         }
 
         public EventRepresentation assertEvent(EventRepresentation actual) {
-            if (expected.getError() != null && ! expected.getType().toString().endsWith("_ERROR")) {
+            if (expected.getError() != null && ! expected.getType().endsWith("_ERROR")) {
                 expected.setType(expected.getType() + "_ERROR");
             }
-            Assert.assertThat("type", actual.getType(), is(expected.getType()));
-            Assert.assertThat("realm ID", actual.getRealmId(), is(realmId));
-            Assert.assertThat("client ID", actual.getClientId(), is(expected.getClientId()));
-            Assert.assertThat("error", actual.getError(), is(expected.getError()));
-            Assert.assertThat("ip address", actual.getIpAddress(), ipAddress);
-            Assert.assertThat("user ID", actual.getUserId(), is(userId));
-            Assert.assertThat("session ID", actual.getSessionId(), is(sessionId));
+            assertThat("type", actual.getType(), is(expected.getType()));
+            assertThat("realm ID", actual.getRealmId(), is(realmId));
+            assertThat("client ID", actual.getClientId(), is(expected.getClientId()));
+            assertThat("error", actual.getError(), is(expected.getError()));
+            assertThat("ip address", actual.getIpAddress(), ipAddress);
+            assertThat("user ID", actual.getUserId(), is(userId));
+            assertThat("session ID", actual.getSessionId(), is(sessionId));
 
             if (details == null || details.isEmpty()) {
 //                Assert.assertNull(actual.getDetails());
@@ -381,7 +436,7 @@ public class AssertEvents implements TestRule {
                         Assert.fail(d.getKey() + " missing");
                     }
 
-                    Assert.assertThat("Unexpected value for " + d.getKey(), actualValue, is(d.getValue()));
+                    assertThat("Unexpected value for " + d.getKey(), actualValue, is(d.getValue()));
                 }
                 /*
                 for (String k : actual.getDetails().keySet()) {
@@ -477,5 +532,27 @@ public class AssertEvents implements TestRule {
 
     private EventRepresentation fetchNextEvent() {
         return context.testingClient.testing().pollEvent();
+    }
+
+    private EventRepresentation fetchNextEvent(int seconds) {
+        if (seconds <= 0) {
+            return fetchNextEvent();
+        }
+
+        final long millis = TimeUnit.SECONDS.toMillis(seconds);
+        final long start = Time.currentTimeMillis();
+        do {
+            try {
+                EventRepresentation event = fetchNextEvent();
+                if (event != null) {
+                    return event;
+                }
+                // wait a bit to receive the event
+                TimeUnit.MILLISECONDS.sleep(millis / 10L);
+            } catch (InterruptedException e) {
+                // no-op
+            }
+        } while (Time.currentTimeMillis() - start < millis);
+        return null;
     }
 }

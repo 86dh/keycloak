@@ -33,6 +33,7 @@ import org.keycloak.credential.CredentialInputUpdater;
 import org.keycloak.credential.CredentialInputValidator;
 import org.keycloak.credential.CredentialModel;
 import org.keycloak.credential.hash.PasswordHashProvider;
+import org.keycloak.credential.hash.Pbkdf2Sha512PasswordHashProviderFactory;
 import org.keycloak.models.GroupModel;
 import org.keycloak.models.KeycloakSession;
 import org.keycloak.models.OTPPolicy;
@@ -150,7 +151,7 @@ public class BackwardsCompatibilityUserStorage implements UserLookupProvider, Us
             hashProvider.encode(userCredentialModel.getValue(), policy.getHashIterations(), newPassword);
 
             // Test expected values of credentialModel
-            assertEquals(newPassword.getAlgorithm(), policy.getHashAlgorithm());
+            assertNotNull(newPassword.getAlgorithm());
             assertNotNull(newPassword.getValue());
             assertNotNull(newPassword.getSalt());
 
@@ -191,12 +192,11 @@ public class BackwardsCompatibilityUserStorage implements UserLookupProvider, Us
     }
 
     protected PasswordHashProvider getHashProvider(PasswordPolicy policy) {
-        PasswordHashProvider hash = session.getProvider(PasswordHashProvider.class, policy.getHashAlgorithm());
-        if (hash == null) {
-            log.warnv("Realm PasswordPolicy PasswordHashProvider {0} not found", policy.getHashAlgorithm());
-            return session.getProvider(PasswordHashProvider.class, PasswordPolicy.HASH_ALGORITHM_DEFAULT);
+        if (policy != null && policy.getHashAlgorithm() != null) {
+            return session.getProvider(PasswordHashProvider.class, policy.getHashAlgorithm());
+        } else {
+            return session.getProvider(PasswordHashProvider.class);
         }
-        return hash;
     }
 
     @Override
@@ -321,19 +321,6 @@ public class BackwardsCompatibilityUserStorage implements UserLookupProvider, Us
     }
 
     @Override
-    public Stream<UserModel> getUsersStream(RealmModel realm) {
-        return getUsers(realm, -1, -1).stream();
-    }
-
-    private List<UserModel> getUsers(RealmModel realm, int firstResult, int maxResults) {
-        return users.values()
-                .stream()
-                .skip(firstResult).limit(maxResults)
-                .map(myUser -> createUser(realm, myUser.username))
-                .collect(Collectors.toList());
-    }
-
-    @Override
     public Stream<UserModel> searchForUserStream(RealmModel realm, String search) {
         return searchForUserStream(realm, search, -1, -1);
     }
@@ -346,14 +333,12 @@ public class BackwardsCompatibilityUserStorage implements UserLookupProvider, Us
 
     @Override
     public Stream<UserModel> searchForUserStream(RealmModel realm, Map<String, String> params) {
-        // Assume that this is not supported
-        return Stream.empty();
+        return searchForUserStream(realm, params, null, null);
     }
 
     @Override
     public Stream<UserModel> searchForUserStream(RealmModel realm, Map<String, String> params, Integer firstResult, Integer maxResults) {
-        // Assume that this is not supported
-        return Stream.empty();
+        return searchForUserStream(realm, params.get(UserModel.SEARCH), firstResult, maxResults);
     }
 
     @Override

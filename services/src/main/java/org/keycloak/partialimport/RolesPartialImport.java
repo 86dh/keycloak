@@ -27,7 +27,7 @@ import org.keycloak.representations.idm.RolesRepresentation;
 import org.keycloak.services.ErrorResponse;
 import org.keycloak.services.ServicesLogger;
 
-import javax.ws.rs.core.Response;
+import jakarta.ws.rs.core.Response;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -59,12 +59,12 @@ public class RolesPartialImport implements PartialImport<RolesRepresentation> {
     private RoleRepresentation newDefaultRole;
 
     @Override
-    public void prepare(PartialImportRepresentation rep, RealmModel realm, KeycloakSession session) throws ErrorResponseException {
+    public void prepare(PartialImportRepresentation rep, RealmModel realm, KeycloakSession session) {
         prepareRealmRoles(rep, realm, session);
         prepareClientRoles(rep, realm, session);
     }
 
-    private void prepareRealmRoles(PartialImportRepresentation rep, RealmModel realm, KeycloakSession session) throws ErrorResponseException {
+    private void prepareRealmRoles(PartialImportRepresentation rep, RealmModel realm, KeycloakSession session) {
         if (!rep.hasRealmRoles()) return;
 
         realmRolesPI.prepare(rep, realm, session);
@@ -82,7 +82,7 @@ public class RolesPartialImport implements PartialImport<RolesRepresentation> {
         this.realmRolesToSkip = realmRolesPI.getToSkip();
     }
 
-    private void prepareClientRoles(PartialImportRepresentation rep, RealmModel realm, KeycloakSession session) throws ErrorResponseException {
+    private void prepareClientRoles(PartialImportRepresentation rep, RealmModel realm, KeycloakSession session) {
         if (!rep.hasClientRoles()) return;
 
         clientRolesPI.prepare(rep, realm, session);
@@ -97,7 +97,7 @@ public class RolesPartialImport implements PartialImport<RolesRepresentation> {
     }
 
     @Override
-    public PartialImportResults doImport(PartialImportRepresentation rep, RealmModel realm, KeycloakSession session) throws ErrorResponseException {
+    public PartialImportResults doImport(PartialImportRepresentation rep, RealmModel realm, KeycloakSession session) {
         PartialImportResults results = new PartialImportResults();
         if (!rep.hasRealmRoles() && !rep.hasClientRoles()) return results;
 
@@ -116,7 +116,7 @@ public class RolesPartialImport implements PartialImport<RolesRepresentation> {
             RepresentationToModel.importRoles(rep.getRoles(), realm);
         } catch (Exception e) {
             ServicesLogger.LOGGER.roleImportError(e);
-            throw new ErrorResponseException(ErrorResponse.error(e.getMessage(), Response.Status.INTERNAL_SERVER_ERROR));
+            throw ErrorResponse.error(e.getMessage(), Response.Status.INTERNAL_SERVER_ERROR);
         }
 
         // add "add" results for new roles created
